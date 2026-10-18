@@ -1793,6 +1793,13 @@ const onGroupParticipants = async ({ id, participants, action }) => {
       await lobbySendForm(id, participants);
     } else if (action === 'remove' || action === 'leave') {
       if (!isChatAllowedId(id)) return;
+      if (action === 'remove' && getChatSettings(id).lobby) {
+        const botNum = jidNum(sock.user.id);
+        const kicked = participants.filter((p) => jidNum(p) !== botNum);
+        if (kicked.length) {
+          await rotateMainInvite();
+        }
+      }
       const meta = await getMeta(id);
       await goodbyeMembers(id, meta, participants);
     }
