@@ -1,0 +1,22 @@
+[Unit]
+Description=DKS WhatsApp Bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=botdks
+WorkingDirectory=/opt/bot-dks-wsp
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Nice=10
+MemoryMax=1400M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bot-dks-wsp
+
+[Install]
+WantedBy=multi-user.target
