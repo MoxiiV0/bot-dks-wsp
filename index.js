@@ -208,6 +208,17 @@ const getMeta = async (jid) => {
   if (c && Date.now() - c.t < 60000) return c.m;
   const m = await sock.groupMetadata(jid);
   metaCache.set(jid, { m, t: Date.now() });
+  try {
+    let changed = false;
+    for (const p of m.participants || []) {
+      const n = jidNum(p.id);
+      if (p.notify && n && econ.names[n] !== p.notify) {
+        econ.names[n] = p.notify;
+        changed = true;
+      }
+    }
+    if (changed) saveEcon();
+  } catch (e) {}
   return m;
 };
 
@@ -446,7 +457,7 @@ const commands = {
   info: {
     desc: ' Información del bot',
     execute: async () => {
-      return `「  ${config.botName}  」\n\n Bot de WhatsApp creado con Baileys\n Versión: 2.0.0\n Propietario: @${config.ownerNumber}`;
+      return `「  ${config.botName}  」\n\n Bot de WhatsApp creado con Baileys\n Versión: 2.0.0\n Propietario: ${econ.names[config.ownerNumber] || 'Propietario'}`;
     },
   },
 
@@ -461,7 +472,7 @@ const commands = {
       const ids = meta.participants.map((p) => p.id);
       let response = ` *${emoji}  MENCION GENERAL  ${emoji}*\n *PARA ${meta.participants.length} MIEMBROS*\n\n${header}`;
       meta.participants.forEach((p) => {
-        response += `${emoji} @${jidNum(p.id)}\n`;
+        response += `${emoji} @${displayName(jidNum(p.id))}\n`;
       });
       response += `\n *${config.botName}*`;
       await sendTo(ctx.jid, response, ids);
@@ -489,7 +500,7 @@ const commands = {
       const meta = await getMeta(ctx.jid);
       const admins = meta.participants.filter((p) => p.admin);
       const ids = admins.map((p) => p.id);
-      const lines = admins.map((p) => `@${jidNum(p.id)}`).join('\n');
+      const lines = admins.map((p) => `@${displayName(jidNum(p.id))}`).join('\n');
       await sendTo(ctx.jid, ` *Administradores:*\n\n${lines}`, ids);
     },
   },
@@ -673,7 +684,7 @@ const commands = {
       if (action === 'reset') {
         list.splice(idx, 1);
         saveSettings();
-        return `✅ Lobby *reiniciado* para @${num}. Se le mandará el formulario de nuevo al entrar.`;
+        return `✅ Lobby *reiniciado* para @${displayName(num)}. Se le mandará el formulario de nuevo al entrar.`;
       }
       const entry = list[idx];
       if (entry.stage === 'form') {
@@ -688,7 +699,7 @@ const commands = {
         entry.stage = 'iniciales';
       }
       saveSettings();
-      await reply(ctx, `\u200E✅ Lobby *avanzado* para @${num}. Etapa actual: *${entry.stage}*.`);
+      await reply(ctx, `\u200E✅ Lobby *avanzado* para @${displayName(num)}. Etapa actual: *${entry.stage}*.`);
     },
   },
 
@@ -904,13 +915,15 @@ const commands = {
       const na = jidNum(a);
       const nb = jidNum(b);
       const pct = pairHash(na, nb);
-      let an = na;
-      let bn = nb;
+      let an = displayName(na);
+      let bn = displayName(nb);
       try {
-        an = (await sock.getName(asJid(a))) || na;
+        const v = await sock.getName(asJid(a));
+        if (v && !/^\+?[\d\s\-()]+$/.test(String(v).trim())) an = String(v).trim().slice(0, 30);
       } catch (e) {}
       try {
-        bn = (await sock.getName(asJid(b))) || nb;
+        const v = await sock.getName(asJid(b));
+        if (v && !/^\+?[\d\s\-()]+$/.test(String(v).trim())) bn = String(v).trim().slice(0, 30);
       } catch (e) {}
       const verdict =
         pct >= 90
@@ -1279,7 +1292,7 @@ const commands = {
       if (action === 'list' || action === '') {
         const list =
           settings.allowedUsers && settings.allowedUsers.length
-            ? settings.allowedUsers.join('\n')
+            ? settings.allowedUsers.map((n) => `• ${displayName(jidNum(n))}`).join('\n')
             : '*Nadie* todavía';
         return ` *Usuarios con permiso:*\n\n${list}`;
       }
@@ -1287,19 +1300,19 @@ const commands = {
       if (!num) return `Uso: ${config.prefix}perm add <número> | ${config.prefix}perm del <número> | ${config.prefix}perm list`;
 
       if (action === 'add') {
-        if ((settings.allowedUsers || []).includes(num)) return `⚠️ ${num} ya tiene permiso.`;
+        if ((settings.allowedUsers || []).includes(num)) return `⚠️ ${displayName(num)} ya tiene permiso.`;
         settings.allowedUsers = settings.allowedUsers || [];
         settings.allowedUsers.push(num);
         saveSettings();
-        return `✅ Permiso otorgado a ${num}`;
+        return `✅ Permiso otorgado a ${displayName(num)}`;
       }
 
       if (action === 'del') {
         const idx = (settings.allowedUsers || []).indexOf(num);
-        if (idx === -1) return `⚠️ ${num} no tiene permiso.`;
+        if (idx === -1) return `⚠️ ${displayName(num)} no tiene permiso.`;
         settings.allowedUsers.splice(idx, 1);
         saveSettings();
-        return `🗑️ Permiso retirado a ${num}`;
+        return `🗑️ Permiso retirado a ${displayName(num)}`;
       }
 
       return `Uso: ${config.prefix}perm add <número> | ${config.prefix}perm del <número> | ${config.prefix}perm list`;
@@ -1316,10 +1329,10 @@ const commands = {
         return `Uso: ${config.prefix}promote <número>\n   o respondé a un mensaje de la persona.`;
       }
       settings.allowedUsers = settings.allowedUsers || [];
-      if (settings.allowedUsers.includes(num)) return `⚠️ ${num} ya tiene permiso.`;
+      if (settings.allowedUsers.includes(num)) return `⚠️ ${displayName(num)} ya tiene permiso.`;
       settings.allowedUsers.push(num);
       saveSettings();
-      return `✅ *${num}* ahora puede usar el bot.`;
+      return `✅ *${displayName(num)}* ahora puede usar el bot.`;
     },
   },
 
@@ -1334,10 +1347,10 @@ const commands = {
       }
       settings.allowedUsers = settings.allowedUsers || [];
       const idx = settings.allowedUsers.indexOf(num);
-      if (idx === -1) return `⚠️ ${num} no tiene permiso.`;
+      if (idx === -1) return `⚠️ ${displayName(num)} no tiene permiso.`;
       settings.allowedUsers.splice(idx, 1);
       saveSettings();
-      return `🗑️ *${num}* ya no puede usar el bot.`;
+      return `🗑️ *${displayName(num)}* ya no puede usar el bot.`;
     },
   },
 
@@ -1383,7 +1396,7 @@ const commands = {
           const meta = await getMeta(id);
           lines.push(`• ${meta.subject || id}`);
         } catch (e) {
-          lines.push(`• ${id}`);
+          lines.push(`• (grupo sin nombre)`);
         }
       }
       return ` *Chats habilitados:*\n\n${lines.join('\n')}`;
@@ -1430,7 +1443,7 @@ const processCommand = async (ctx) => {
 };
 
 const buildNames = (recipients) =>
-  recipients.map((id) => `@${jidNum(id)}`).join(', ');
+  recipients.map((id) => `@${displayName(jidNum(id))}`).join(', ');
 
 const buildMentions = (recipients) =>
   recipients.map((id) => asJid(id));
@@ -1736,7 +1749,7 @@ const handleMessage = async (ctx) => {
 
   tracker.count++;
   if (tracker.count >= 5) {
-    await sendTo(ctx.jid, ` @${ctx.senderNum} *Anti-spam:* Has enviado demasiados mensajes rápido. Calma un poco.`);
+    await sendTo(ctx.jid, ` @${displayName(ctx.senderNum)} *Anti-spam:* Has enviado demasiados mensajes rápido. Calma un poco.`);
     tracker.count = 0;
     tracker.firstMsg = now;
   }
