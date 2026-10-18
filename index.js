@@ -11,6 +11,7 @@ const pino = require('pino');
 const fs = require('fs');
 const config = require('./config');
 const { imageToSticker } = require('./lib/sticker');
+const { parseFormData, ACK } = require('./lib/lobbyForm');
 
 const SETTINGS_FILE = 'settings.json';
 const defaultSettings = {
@@ -1487,52 +1488,14 @@ const handleLobbyAnswer = async (ctx) => {
 
   if (entry.stage === 'form') {
     const rawLines = (ctx.text || '').split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-
-    const extractValue = (line, label) => {
-      const idx = line.toLowerCase().indexOf(label.toLowerCase());
-      if (idx === -1) return line;
-      const after = line.slice(idx + label.length).trim();
-      return after.replace(/^[:：\-\s]+/, '').trim();
-    };
-
-    const labelVariants = [
-      ['quien te reclut', 'me reclut', 'reclut'],
-      ['nombre o apodo', 'nombre', 'apodo'],
-      ['edad'],
-      ['usuario de roblox', 'usuario roblox', 'usuario', 'roblox'],
-      ['pa', 'pais', 'país'],
-      ['pronombre', 'pronombres'],
-    ];
-
     entry.formData = entry.formData || {};
-
-    for (const line of rawLines) {
-      for (let i = 0; i < labelVariants.length; i++) {
-        const variants = labelVariants[i];
-        const matchedLabel = variants.find(v => line.toLowerCase().includes(v));
-        if (matchedLabel) {
-          const val = extractValue(line, matchedLabel);
-          if (val) entry.formData[i] = val;
-          break;
-        }
-      }
-      if (Object.keys(entry.formData).length === 0 && rawLines.length === 1) {
-        const idx = Object.keys(entry.formData).length;
-        if (idx < 6) entry.formData[idx] = line;
-      }
-    }
-
-    const hasLabels = rawLines.some(l => labelVariants.some(v => v.some(vv => l.toLowerCase().includes(vv))));
-    if (!hasLabels && rawLines.length === 1 && Object.keys(entry.formData).length <= 1) {
-      const nextIdx = Object.keys(entry.formData).length;
-      if (nextIdx < 6) entry.formData[nextIdx] = rawLines[0];
-    }
+    const { hasLabels } = parseFormData(rawLines, entry.formData);
 
     const isComplete = Object.keys(entry.formData).length >= 6 || (hasLabels && Object.keys(entry.formData).length >= 3);
 
     if (!isComplete) {
       const t = (ctx.text || '').trim().toLowerCase();
-      if (['ok', 'okey', 'oki', 'si', 'sí', 'dale', 'confirmo', 'sip', 'yes', 'listo', 'va'].includes(t)) {
+      if (ACK.includes(t)) {
         const pending = 6 - Object.keys(entry.formData).length;
         await reply(
           ctx,
@@ -1788,9 +1751,17 @@ const onGroupParticipants = async ({ id, participants, action }) => {
         await rotateMainInvite();
       }
       if (!isChatAllowedId(id)) return;
-      const meta = await getMeta(id);
-      await welcomeMembers(id, meta, participants);
-      await lobbySendForm(id, participants);
+      try {
+        const meta = await getMeta(id);
+        await welcomeMembers(id, meta, participants);
+      } catch (e) {
+        console.error('Error en bienvenida:', e.message || e);
+      }
+      try {
+        await lobbySendForm(id, participants);
+      } catch (e) {
+        console.error('Error enviando formulario del lobby:', e.message || e);
+      }
     } else if (action === 'remove' || action === 'leave') {
       if (!isChatAllowedId(id)) return;
       if (action === 'remove' && getChatSettings(id).lobby) {
