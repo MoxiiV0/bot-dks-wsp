@@ -145,6 +145,17 @@ const WORK_JOBS = [
   'Trabajaste como podador de arbustos y ganaste',
   'Hiciste trabajo social por una buena causa. Recibiste',
   'Andres te dono. jaja fking pobre',
+  'Nadie te hizo caso en el trabajo pero igual te pagaron',
+  'Trabajaste gratis media hora por olvidar pedir aumento. Al final te dieron',
+  'Vendiste tu vieja consola y ganaste',
+  'Le hiciste mandados a tu mamá y te pagó',
+  'Hiciste el trabajo de tu compañero y él se llevó el crédito. De lástima te dieron',
+  'Atendiste el turno de la mañana en la panadería y ganaste',
+  'Diste una clase particular de matemáticas y te pagaron',
+  'Repartiste periódicos antes de las 6 AM y ganaste',
+  'Ayudaste a cargar muebles en una mudanza y te dieron',
+  'Hiciste un turno extra en el hospital y te pagaron',
+  'Adriana te premio top migajero/a alch valorate',
 ];
 
 const SLUT_WIN = [
