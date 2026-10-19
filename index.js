@@ -1076,6 +1076,12 @@ const commands = {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'work', 4 * 60 * 1000);
       if (left > 0) return `⏳ *Ya trabajaste, espere unos ${fmtMS(left)} para volver a trabajar!!*`;
+      if (Math.random() < 1 / 1000000) {
+        u.cash += 100000;
+        cdSet(u, 'work');
+        saveEcon();
+        return `🍀 *Mora te dono* — ¡IMPOSIBLE! 🎉\n\nGanaste *${money(100000)}*`;
+      }
       const ganancia = rand(200, 900);
       u.cash += ganancia;
       cdSet(u, 'work');
