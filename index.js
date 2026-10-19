@@ -171,6 +171,7 @@ const SLUT_FAIL = [
   'Te denunciaron y pagaste una multa de',
   'Resultó ser un plan de la policía. Perdiste',
   'Te confesaste con el oficial equivocado. Perdiste',
+  'apostaste todo a que andres volviera y perdiste',
 ];
 
 const CRIME_WIN = [
