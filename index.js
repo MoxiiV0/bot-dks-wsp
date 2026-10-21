@@ -83,7 +83,7 @@ const econUser = (id) => {
   return u;
 };
 
-const money = (n) => '$' + Number(n).toLocaleString('es-CO');
+const money = (n) => '¥' + Number(n).toLocaleString('en-US') + ' Coins';
 const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
@@ -100,6 +100,22 @@ const fmtMS = (ms) => {
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${String(m).padStart(2, '0')} m ${String(s).padStart(2, '0')} s`;
+};
+
+const fmtCooldownMsg = (ms, cmd) => {
+  const total = Math.ceil(ms / 1000);
+  let t;
+  if (total < 60) {
+    t = `${total} segundo${total === 1 ? '' : 's'}`;
+  } else if (total < 3600) {
+    const m = Math.floor(total / 60);
+    t = `${m} minuto${m === 1 ? '' : 's'}`;
+  } else {
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    t = m > 0 ? `${h} hora${h === 1 ? '' : 's'} ${m} minuto${m === 1 ? '' : 's'}` : `${h} hora${h === 1 ? '' : 's'}`;
+  }
+  return `《✧》 Debes esperar *${t}* para usar #${cmd} de nuevo.`;
 };
 
 const cdLeft = (u, cmd, ms) => Math.max(0, (u.cd[cmd] || 0) + ms - Date.now());
@@ -1075,18 +1091,18 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'work', 4 * 60 * 1000);
-      if (left > 0) return `⏳ *Ya trabajaste, espere unos ${fmtMS(left)} para volver a trabajar!!*`;
+      if (left > 0) return fmtCooldownMsg(left, 'work');
       if (Math.random() < 1 / 1000000) {
         u.cash += 100000;
         cdSet(u, 'work');
         saveEcon();
-        return `🍀 *Mora te dono* — ¡IMPOSIBLE! 🎉\n\nGanaste *${money(100000)}*`;
+        return `✿ ¡1 EN UN MILLÓN! Mora te donó *${money(100000)}*. ¡IMPOSIBLE!`;
       }
       const ganancia = rand(200, 900);
       u.cash += ganancia;
       cdSet(u, 'work');
       saveEcon();
-      return `*${pick(WORK_JOBS)}* ${money(ganancia)}`;
+      return `✿ ${pick(WORK_JOBS)} *${money(ganancia)}*.`;
     },
   },
 
@@ -1095,18 +1111,18 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'slut', 6 * 60 * 1000);
-      if (left > 0) return `⏳ *Aún no, espere unos ${fmtMS(left)} para volver a intentarlo!!*`;
+      if (left > 0) return fmtCooldownMsg(left, 'slut');
       cdSet(u, 'slut');
       if (Math.random() < 0.35) {
         const perdida = Math.min(u.cash, rand(100, 500));
         u.cash -= perdida;
         saveEcon();
-        return `❌ *${pick(SLUT_FAIL)}* ${money(perdida)}`;
+        return `✿ ${pick(SLUT_FAIL)} *${money(perdida)}*.`;
       }
       const ganancia = rand(300, 1200);
       u.cash += ganancia;
       saveEcon();
-      return `✅ *${pick(SLUT_WIN)}* ${money(ganancia)}`;
+      return `✿ ${pick(SLUT_WIN)} *${money(ganancia)}*.`;
     },
   },
 
@@ -1115,18 +1131,18 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'crime', 8 * 60 * 1000);
-      if (left > 0) return `⏳ *Ya delinquiste hace poco, espere unos ${fmtMS(left)}!!*`;
+      if (left > 0) return fmtCooldownMsg(left, 'crime');
       cdSet(u, 'crime');
       if (Math.random() < 0.4) {
         const multa = Math.min(u.cash, rand(200, 800));
         u.cash -= multa;
         saveEcon();
-        return `❌ *${pick(CRIME_FAIL)}* ${money(multa)}`;
+        return `✿ ${pick(CRIME_FAIL)} *${money(multa)}*.`;
       }
       const ganancia = rand(500, 2500);
       u.cash += ganancia;
       saveEcon();
-      return `✅ *${pick(CRIME_WIN)}* ${money(ganancia)}`;
+      return `✿ ${pick(CRIME_WIN)} *${money(ganancia)}*.`;
     },
   },
 
@@ -1135,17 +1151,12 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'daily', 24 * 60 * 60 * 1000);
-      if (left > 0) {
-        const total = Math.ceil(left / 1000);
-        const h = Math.floor(total / 3600);
-        const m = Math.floor((total % 3600) / 60);
-        return `⏳ *Ya reclamaste tu regalo. Vuelve en ${h} Hora(s) ${m} Minuto(s)*`;
-      }
+      if (left > 0) return fmtCooldownMsg(left, 'daily');
       const ganancia = pick([1000, 1200, 1500, 1800, 2000, 2300, 2600, 3000]);
       u.cash += ganancia;
       cdSet(u, 'daily');
       saveEcon();
-      return `╔════════════════╗\n🎁 *¡RECLAMASTE TU REGALO!*\n\n*+${money(ganancia)}* 💰\n╚════════════════╝`;
+      return `✿ ¡Reclamaste tu regalo diario! *${money(ganancia)}*.`;
     },
   },
 
@@ -1155,24 +1166,24 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       const left = cdLeft(u, 'rob', 10 * 60 * 1000);
-      if (left > 0) return ` *¡Hey! Espera ${fmtMS(left)} para volver a robar*`;
+      if (left > 0) return fmtCooldownMsg(left, 'rob');
       const target = getTargetUser(ctx);
       if (!target) return 'Mencioná a la víctima: #rob @usuario (o respondele a su mensaje).';
       if (target === me) return 'No podés robarte a vos mismo. 🤡';
       const t = econUser(target);
-      if (t.cash <= 0) return `*${displayName(target)}* no tiene plata. No robes a un pobre :v`;
+      if (t.cash <= 0) return `✿ ${displayName(target)} no tiene Coins. No robes a un pobre :v`;
       cdSet(u, 'rob');
       if (Math.random() < 0.5) {
         const steal = Math.min(t.cash, Math.max(50, rand(Math.floor(t.cash * 0.1), Math.floor(t.cash * 0.25))));
         t.cash -= steal;
         u.cash += steal;
         saveEcon();
-        return `*💸 Robaste ${money(steal)} a ${displayName(target)}*`;
+        return `✿ Robaste *${money(steal)}* a *${displayName(target)}*.`;
       }
       const fine = Math.min(u.cash, rand(100, 600));
       u.cash -= fine;
       saveEcon();
-      return `*🚓 ¡Te atraparon! Perdiste ${money(fine)}*`;
+      return `✿ ¡Te atraparon! Perdiste *${money(fine)}*.`;
     },
   },
 
@@ -1195,7 +1206,7 @@ const commands = {
       u.cash -= amount;
       econUser(target).cash += amount;
       saveEcon();
-      return `💸 *Transferencia realizada*\n\n💰 Enviaste: *${money(amount)}*\n👤 Para: *${displayName(target)}*`;
+      return `✿ Transferiste *${money(amount)}* a *${displayName(target)}*.`;
     },
   },
 
@@ -1205,24 +1216,30 @@ const commands = {
       const id = getTargetUser(ctx) || getSenderId(ctx);
       const u = econUser(id);
       const total = u.cash + u.bank;
-      return `═══ 💰 *BALANCE* ═══\n👤 *USUARIO:* ${displayName(id)}\n─────────────\n💵 Efectivo: *${money(u.cash)}* (afuera del banco)\n─────────────\n🏦 Banco: *${money(u.bank)}* (adentro del banco)\n─────────────\n✨ Total: *${money(total)}*\n═══════════════`;
+      return `✿ 》》Economía *${displayName(id)}*《《 ✿\n\n⛀ Dinero » *${money(u.cash)}*\n⚿ Banco » *${money(u.bank)}*\n⛁ Total » *${money(total)}*\n\n> Para proteger tu dinero, ¡deposítalo en el banco usando #deposit!`;
     },
   },
 
   baltop: {
-    desc: ' Top 10 de usuarios más ricos',
-    execute: async () => {
+    desc: ' Top de usuarios más ricos - uso: #baltop [página]',
+    execute: async (ctx) => {
       const rows = Object.entries(econ.users)
         .map(([id, u]) => ({ id, total: (Number(u.cash) || 0) + (Number(u.bank) || 0) }))
         .filter((r) => r.total > 0)
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 10);
-      if (rows.length === 0) return ' TODAVÍA no hay plata por acá. ¡Escribí #work para empezar!';
-      const medals = ['🥇', '🥈', '🥉'];
-      let txt = '═══ 💰 *TOP RICOS* ═══\n\n';
-      rows.forEach((r, i) => {
-        txt += ` ${medals[i] || `${i + 1}.`} ${displayName(r.id)} — *${money(r.total)}*\n`;
+        .sort((a, b) => b.total - a.total);
+      if (rows.length === 0) return '✿ Todavía no hay plata por acá. ¡Escribí #work para empezar!';
+      const perPage = 10;
+      const pages = Math.max(1, Math.ceil(rows.length / perPage));
+      const arg = ctx.text.slice(config.prefix.length + 7).trim();
+      let page = /^\d+$/.test(arg) ? parseInt(arg, 10) : 1;
+      if (page < 1 || page > pages) page = 1;
+      const slice = rows.slice((page - 1) * perPage, page * perPage);
+      let txt = '「✿」Los usuarios con más Coins son:\n\n';
+      slice.forEach((r, i) => {
+        const rank = (page - 1) * perPage + i + 1;
+        txt += `✰ ${rank} » *${displayName(r.id)}*\n\t\t Total→ *${money(r.total)}*\n`;
       });
+      txt += `\n> • Página ${page} de ${pages}`;
       return txt;
     },
   },
@@ -1241,7 +1258,7 @@ const commands = {
       u.cash -= amount;
       u.bank += amount;
       saveEcon();
-      return `═══ 🏦 *DEPÓSITO* ═══\n\n💰 Monto: *${money(amount)}*\n─────────────\n💵 Efectivo: *${money(u.cash)}*\n🏦 Banco: *${money(u.bank)}*`;
+      return `✿ Depositaste *${money(amount)}* en el banco, ya no podrán robártelo.`;
     },
   },
 
@@ -1259,7 +1276,7 @@ const commands = {
       u.bank -= amount;
       u.cash += amount;
       saveEcon();
-      return `═══ 💵 *RETIRO* ═══\n\n💰 Monto: *${money(amount)}*\n─────────────\n💵 Efectivo: *${money(u.cash)}*\n🏦 Banco: *${money(u.bank)}*`;
+      return `✿ Retiraste *${money(amount)}* del banco, cuida tu dinero.`;
     },
   },
 
@@ -1276,7 +1293,7 @@ const commands = {
       const amount = parseInt(amountArg, 10);
       econUser(target).cash += amount;
       saveEcon();
-      return `🎁 *Le diste ${money(amount)} a ${displayName(target)}*`;
+      return `✿ Le diste *${money(amount)}* a *${displayName(target)}*.`;
     },
   },
 
@@ -1295,7 +1312,7 @@ const commands = {
       const taken = Math.min(amount, t.cash);
       t.cash -= taken;
       saveEcon();
-      return `✂️ *Le quitaste ${money(taken)} a ${displayName(target)}*`;
+      return `✿ Le quitaste *${money(taken)}* a *${displayName(target)}*.`;
     },
   },
 
