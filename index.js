@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -2128,6 +2128,88 @@ const commands = {
     },
   },
 
+  titulos: {
+    desc: ' Ver títulos disponibles y desbloqueados. Uso: #titulos',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const nuevos = rpg.checkTitles(u);
+      markEconDirty();
+
+      let txt = `🏆 *Títulos Disponibles*\n\n`;
+      for (const [key, t] of Object.entries(rpg.TITLES)) {
+        const desbloqueado = u.rpg.titulosDesbloqueados && u.rpg.titulosDesbloqueados.includes(key);
+        const equipado = u.rpg.tituloEquipado === key ? ' (equipado)' : '';
+        const estado = desbloqueado ? '✅' : '🔒';
+        txt += `${estado} *${t.nombre}*${equipado}\n   ${t.descripcion}\n`;
+      }
+
+      if (nuevos.length > 0) {
+        txt += `\n✨ ¡Nuevos títulos desbloqueados: ${nuevos.join(', ')}!`;
+      }
+
+      txt += `\n\nUsá: #equipar-titulo <nombre> para equipar uno.`;
+      return txt;
+    },
+  },
+
+  'equipar-titulo': {
+    desc: ' Equipar un título desbloqueado. Uso: #equipar-titulo <nombre>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const nombreTitulo = args.join(' ');
+
+      if (!nombreTitulo) {
+        let txt = `🏆 *Títulos desbloqueados*\n\n`;
+        for (const key of u.rpg.titulosDesbloqueados || []) {
+          const t = rpg.TITLES[key];
+          const equipado = u.rpg.tituloEquipado === key ? ' (equipado)' : '';
+          txt += `• ${t.nombre}${equipado}\n`;
+        }
+        txt += `\nUsá: #equipar-titulo <nombre del título>`;
+        return txt;
+      }
+
+      const clave = Object.keys(rpg.TITLES).find((k) => rpg.TITLES[k].nombre.toLowerCase() === nombreTitulo.toLowerCase());
+      if (!clave) return 'Título no encontrado o no desbloqueado.';
+
+      const resultado = rpg.unlockTitle(u, clave);
+      if (resultado.error) return resultado.error;
+
+      markEconDirty();
+      return `✅ Título equipado: *${resultado.titulo}*. Sus bonificaciones están activas en tus estadísticas.`;
+    },
+  },
+
+  'mis-titulos': {
+    desc: ' Ver tus títulos desbloqueados y equipado. Uso: #mis-titulos',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const s = rpg.getStatsCompletos(u);
+
+      let txt = `🏆 *Tus Títulos*\n\n`;
+      if (s.titulosDesbloqueados.length === 0) {
+        txt += 'Aún no tienes títulos desbloqueados.\n';
+      } else {
+        for (const key of s.titulosDesbloqueados) {
+          const t = rpg.TITLES[key];
+          const equipado = s.tituloEquipado === t.nombre ? ' (equipado)' : '';
+          txt += `• ${t.nombre}${equipado}\n   ${t.descripcion}\n`;
+        }
+      }
+      txt += `\nTítulo equipado: *${s.tituloEquipado}*\n`;
+      txt += `\nUsá: #equipar-titulo <nombre> para cambiar.`;
+      return txt;
+    },
+  },
+
   'activar-mazmorra': {
     desc: ' Activa/desactiva el modo mazmorra en este chat (solo admins). Uso: #activar-mazmorra on/off',
     execute: async (ctx) => {
@@ -3200,7 +3282,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
