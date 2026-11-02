@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -1538,6 +1538,10 @@ const commands = {
   mazmorra: {
     desc: ' Entrá a la mazmorra. Uso: #mazmorra <apuesta> (mínimo 1000)',
     execute: async (ctx) => {
+      if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
+      if (!settings.chats[ctx.jid] || !settings.chats[ctx.jid].mazmorraActiva) {
+        return '🔒 La mazmorra no está activa en este grupo. Un admin debe activarla con: #activar-mazmorra on';
+      }
       if (!globalThis._mazmorra) globalThis._mazmorra = new Map();
       const me = getSenderId(ctx);
       if (globalThis._mazmorra.has(me)) {
@@ -2124,8 +2128,125 @@ const commands = {
     },
   },
 
+  'activar-mazmorra': {
+    desc: ' Activa/desactiva el modo mazmorra en este chat (solo admins). Uso: #activar-mazmorra on/off',
+    execute: async (ctx) => {
+      if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins pueden activar la mazmorra.';
+
+      settings.chats = settings.chats || {};
+      settings.chats[ctx.jid] = settings.chats[ctx.jid] || {};
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const modo = args[0] ? args[0].toLowerCase() : '';
+
+      if (modo === 'on') {
+        settings.chats[ctx.jid].mazmorraActiva = true;
+        saveSettings();
+        return '🏰 *Mazmorra activada* en este grupo. Ahora se pueden usar los comandos de mazmorra.';
+      } else if (modo === 'off') {
+        settings.chats[ctx.jid].mazmorraActiva = false;
+        saveSettings();
+        return '🔒 *Mazmorra desactivada* en este grupo.';
+      } else {
+        const estado = settings.chats[ctx.jid].mazmorraActiva ? 'activada ✅' : 'desactivada ❌';
+        return `🏰 Estado de mazmorra en este grupo: *${estado}*\n\nUsá:\n#activar-mazmorra on  (activar)\n#activar-mazmorra off  (desactivar)`;
+      }
+    },
+  },
+
+  invocar: {
+    desc: ' Invoca una bestia domada en combate. Uso: #invocar <bestia>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.clase || u.rpg.clase !== 'invocador') {
+        return 'Solo los Invocadores pueden invocar bestias.';
+      }
+
+      if (!u.rpg.bestiasDomadas || u.rpg.bestiasDomadas.length === 0) {
+        return 'No tienes bestias domadas. Usá #domar <bestia> primero.';
+      }
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const bestia = args[0] ? args[0].toLowerCase() : '';
+
+      if (!bestia) {
+        let txt = `👹 *Bestias disponibles para invocar*\n\n`;
+        for (const b of u.rpg.bestiasDomadas) {
+          txt += `• ${b}\n`;
+        }
+        txt += `\nUsá: #invocar <bestia>`;
+        return txt;
+      }
+
+      if (!u.rpg.bestiasDomadas.includes(bestia)) {
+        return `No tienes domada a ${bestia}.`;
+      }
+
+      if (u.rpg.combate) {
+        return 'Ya estás en un combate. Termina el actual antes de invocar.';
+      }
+
+      const bestiasInfo = {
+        lobo: { nombre: '🐺 Lobo', hp: 100, atk: 15 },
+        esqueleto: { nombre: '💀 Esqueleto', hp: 80, atk: 12 },
+        jabali: { nombre: '🐗 Jabalí', hp: 120, atk: 18 },
+      };
+
+      const info = bestiasInfo[bestia];
+      if (!info) return 'Bestia no reconocida.';
+
+      u.rpg.bestiasActivas = u.rpg.bestiasActivas || [];
+      u.rpg.bestiasActivas.push({ nombre: info.nombre, hp: info.hp, atk: info.atk });
+      markEconDirty();
+
+      return `👹 ¡Has invocado a *${info.nombre}*!\nHP: ${info.hp} | ATK: ${info.atk}\nTu bestia te acompañará en el próximo combate.`;
+    },
+  },
+
+  'usar-especial': {
+    desc: ' Usa tu habilidad especial de nivel (cada 10 niveles). Uso: #usar-especial <clave>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.nivel) return 'No tienes nivel de clase.';
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const key = args[0] ? args[0].toLowerCase() : '';
+
+      if (!key) {
+        const especial = rpg.obtenerHabilidadEspecial(u.rpg.nivel);
+        if (!especial) {
+          const proximo = Math.ceil(u.rpg.nivel / 10) * 10;
+          return `No hay habilidad especial disponible. Tu próxima será en el nivel ${proximo}.`;
+        }
+        return `Usá: #usar-especial ${especial.key}\n${especial.descripcion}\nCosto: ${money(especial.costo)}`;
+      }
+
+      const especial = rpg.obtenerHabilidadEspecial(u.rpg.nivel);
+      if (!especial || especial.key !== key) {
+        return 'No tienes una habilidad especial disponible con esa clave.';
+      }
+
+      if (u.cash < especial.costo) {
+        return `No tienes suficiente dinero. Costo: ${money(especial.costo)}.`;
+      }
+
+      u.cash = Math.max(0, u.cash - especial.costo);
+      u.rpg.habilidadEspecialActiva = key;
+      markEconDirty();
+
+      return `✨ ¡Habilidad especial activada: *${especial.nombre}*!\n${especial.descripcion}\nCosto: ${money(especial.costo)}\nEfecto activo para tu próximo combate.`;
+    },
+  },
+
   clase: {
-    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro>',
+    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro|asesino|gran_arquero|caballero|archimago|invocador|nigromante>',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
@@ -3079,7 +3200,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
