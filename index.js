@@ -619,8 +619,8 @@ const formatTemplate = (template, vars) => {
 };
 
 const helpCategories = {
-  casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'medida', 'match', '8ball'],
-  mazmorra: ['mazmorra', 'avanzar', 'retirarse'],
+  casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
+  mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
   rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
@@ -1610,6 +1610,107 @@ const commands = {
     },
   },
 
+  'mazmorra-boss': {
+    desc: ' Enfrenta al jefe de la mazmorra (solo cada 10 pisos). Uso: #mazmorra-boss',
+    execute: async (ctx) => {
+      if (!globalThis._mazmorraBoss) globalThis._mazmorraBoss = new Map();
+      const me = getSenderId(ctx);
+      if (globalThis._mazmorraBoss.has(me)) {
+        return 'Ya estás en un combate contra el jefe. Usá #pelear-boss para atacar.';
+      }
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.clase) {
+        return 'Necesitas elegir una clase con #clase antes de enfrentar al jefe.';
+      }
+
+      const pisoBoss = 10;
+      const bossHp = 500;
+      const bossAtk = 25;
+      const bossNombre = '🐉 Señor de la Mazmorra';
+
+      globalThis._mazmorraBoss.set(me, {
+        hp: bossHp,
+        maxHp: bossHp,
+        atk: bossAtk,
+        nombre: bossNombre,
+        turnos: 0,
+        recompensa: 15000,
+        exp: 300,
+      });
+
+      markEconDirty();
+
+      return ` 🏰 *Mazmorra DKS - Jefe Apareció!*\n\n *Enemigo:* ${bossNombre}\n *HP:* ${bossHp}/${bossHp}\n *ATK:* ${bossAtk}\n\n ¡Un poderoso jefe bloquea tu camino al piso ${pisoBoss}!\n Usá #pelear-boss para atacar.\n ¡Derrotalo para obtener ${money(15000)} y 300 EXP!`;
+    },
+  },
+
+  'pelear-boss': {
+    desc: ' Ataca al jefe de la mazmorra en combate actual.',
+    execute: async (ctx) => {
+      if (!globalThis._mazmorraBoss) return 'No hay combate de jefe activo.';
+      const me = getSenderId(ctx);
+      const boss = globalThis._mazmorraBoss.get(me);
+      if (!boss) return 'No estás en un combate contra el jefe. Usá #mazmorra-boss para iniciar.';
+
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const clase = rpg.CLASSES[u.rpg.clase] || { atkBase: 10, defBase: 5 };
+      const arma = rpg.WEAPONS[u.rpg.arma] || { atk: 0 };
+
+      boss.turnos += 1;
+
+      // Daño del jugador
+      const dmgJugador = Math.max(1, clase.atkBase + arma.atk + Math.floor(Math.random() * 6) - 2);
+      boss.hp = Math.max(0, boss.hp - dmgJugador);
+
+      let texto = `⚔️ *Combate contra ${boss.nombre}*\n`;
+      texto += `Atacaste e infligiste *${dmgJugador}* de daño.\n`;
+      texto += `HP del jefe: ${boss.hp}/${boss.maxHp}\n`;
+
+      if (boss.hp <= 0) {
+        // Victoria
+        u.cash += boss.recompensa;
+        u.rpg.exp += boss.exp;
+        // Subir nivel si es necesario
+        while (u.rpg.exp >= u.rpg.nivel * 100) {
+          u.rpg.exp -= u.rpg.nivel * 100;
+          u.rpg.nivel += 1;
+        }
+        globalThis._mazmorraBoss.delete(me);
+        markEconDirty();
+        writeAuditLog('mazmorra-boss', me, me, boss.recompensa, ctx.jid);
+        texto += `\n💀 *¡Derrotaste al jefe!*\n💰 Ganaste ${money(boss.recompensa)}\n⭐ Ganaste ${boss.exp} EXP\n🏆 ¡Puedes continuar al siguiente piso de la mazmorra!`;
+        return texto;
+      }
+
+      // El jefe contraataca
+      const dmgBoss = Math.max(1, boss.atk + Math.floor(Math.random() * 6) - 3);
+      const defensa = clase.defBase || 0;
+      const dmgFinal = Math.max(0, dmgBoss - defensa);
+
+      // Usar oro como "vida" temporal o simplemente registrar daño
+      // Restamos una pequeña cantidad de oro como "costo de curación" o simplemente avisamos
+      texto += `👹 ${boss.nombre} te contraataca e inflige *${dmgFinal}* de daño.\n`;
+      texto += `Turnos: ${boss.turnos}\n`;
+
+      if (boss.turnos >= 15) {
+        // Derrota por tiempo o demasiados turnos
+        const penalidad = Math.floor(u.cash * 0.2);
+        u.cash = Math.max(0, u.cash - penalidad);
+        globalThis._mazmorraBoss.delete(me);
+        markEconDirty();
+        texto += `\n⏰ El jefe te venció tras ${boss.turnos} turnos.\n💸 Perdiste ${money(penalidad)} en la huida.`;
+        return texto;
+      }
+
+      markEconDirty();
+      texto += `\nUsá #pelear-boss para seguir atacando.`;
+      return texto;
+    },
+  },
+
   clase: {
     desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro>',
     execute: async (ctx) => {
@@ -2138,6 +2239,63 @@ const commands = {
     },
   },
 
+  tragamonedas: {
+    desc: ' Tragamonedas del casino. Uso: #tragamonedas <apuesta> (mínimo 1000)',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const betArg = args[0];
+      let bet;
+      if (!betArg) return 'Uso: #tragamonedas <apuesta> (mínimo 1000 Coins). Ej: #tragamonedas 1000';
+      if (betArg === 'all' || betArg === 'todo') bet = u.cash;
+      else if (/^\d+$/.test(betArg)) bet = parseInt(betArg, 10);
+      else return 'Uso: #tragamonedas <apuesta> (mínimo 1000 Coins). Ej: #tragamonedas 1000';
+      if (!bet || bet < 1000) return 'La apuesta mínima es de *1000 Coins*.';
+      if (bet > u.cash) return 'No tienes suficiente dinero para esa apuesta.';
+
+      u.cash = Math.max(0, u.cash - bet);
+      markEconDirty();
+
+      const simbolos = ['🍒', '🍋', '🔔', '💎', '7️⃣'];
+      const rodillo1 = simbolos[Math.floor(Math.random() * simbolos.length)];
+      const rodillo2 = simbolos[Math.floor(Math.random() * simbolos.length)];
+      const rodillo3 = simbolos[Math.floor(Math.random() * simbolos.length)];
+
+      let multiplicador = 0;
+      let mensajeResultado = '';
+
+      if (rodillo1 === rodillo2 && rodillo2 === rodillo3) {
+        // Jackpot: 3 iguales
+        if (rodillo1 === '7️⃣') {
+          multiplicador = 50; // Jackpot máximo
+          mensajeResultado = `🎰 *JACKPOT MÁXIMO!* ¡${rodillo1} ${rodillo2} ${rodillo3}!`;
+        } else {
+          multiplicador = 10;
+          mensajeResultado = `🎰 *¡JACKPOT!* ¡${rodillo1} ${rodillo2} ${rodillo3}!`;
+        }
+      } else if (rodillo1 === rodillo2 || rodillo2 === rodillo3 || rodillo1 === rodillo3) {
+        // Dos iguales
+        multiplicador = 2;
+        mensajeResultado = `🎰 *¡Dos iguales!* ${rodillo1} ${rodillo2} ${rodillo3}`;
+      } else {
+        multiplicador = 0;
+        mensajeResultado = `🎰 *Sigue intentando:* ${rodillo1} ${rodillo2} ${rodillo3}`;
+      }
+
+      const ganancia = Math.floor(bet * multiplicador);
+      const neto = ganancia - bet;
+
+      if (multiplicador > 0) {
+        u.cash += ganancia;
+        markEconDirty();
+        writeAuditLog('tragamonedas', me, me, bet, ctx.jid);
+      }
+
+      return `🎰 *Tragamonedas DKS*\n\n${rodillo1} | ${rodillo2} | ${rodillo3}\n\n${mensajeResultado}\nApuesta: ${money(bet)}\n${multiplicador > 0 ? `¡Ganaste ${money(ganancia)}! (x${multiplicador})` : `Perdiste ${money(bet)}.`}\nSaldo actual: ${money(u.cash)}`;
+    },
+  },
+
   rob: {
     desc: ' Robále plata a otro usuario - uso: #rob <@usuario>',
     execute: async (ctx) => {
@@ -2508,7 +2666,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
