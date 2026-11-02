@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -1580,7 +1580,13 @@ const commands = {
       if (!session || !session.activo) return 'No tenés una sesión de mazmorra activa. Escribí #mazmorra para entrar.';
 
       session.piso += 1;
-      const evento = generarEventoMazmorra(session);
+      const u = econUser(me);
+      const evento = rpg.generarEventoMazmorra(u);
+
+      if (evento.tipo === 'perder_oro' && u.cash <= 0) {
+        session.activo = false;
+        session.ganado = 0;
+      }
 
       if (!session.activo) {
         globalThis._mazmorra.delete(me);
@@ -1907,6 +1913,69 @@ const commands = {
       }
       if (skill.bloquear) {
         txt += `🫥 Bloqueas todo el daño del próximo turno enemigo.`;
+      }
+
+      return txt;
+    },
+  },
+
+  combinar: {
+    desc: ' Combina dos habilidades de tu clase para crear una nueva. Uso: #combinar <skill1> <skill2>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const key1 = args[0] ? args[0].toLowerCase() : '';
+      const key2 = args[1] ? args[1].toLowerCase() : '';
+
+      if (!key1 || !key2) {
+        let txt = `🔧 *Combinar Habilidades*\n\nUso: #combinar <skill1> <skill2>\n\nCombinaciones disponibles para tu clase:\n`;
+        if (u.rpg.clase && rpg.COMBINACIONES_SKILLS) {
+          for (const [key, comb] of Object.entries(rpg.COMBINACIONES_SKILLS)) {
+            if (comb.clases.includes(u.rpg.clase)) {
+              txt += `• ${key1 === comb.skill1 ? comb.skill1 + '+' + comb.skill2 : comb.skill2 + '+' + comb.skill1} → ${comb.nombre} (${money(comb.costo)})\n`;
+            }
+          }
+        }
+        txt += `\nEjemplo: #combinar golpe_fuerte escudo`;
+        return txt;
+      }
+
+      const resultado = rpg.combinarSkills(u, key1, key2);
+      if (resultado.error) return resultado.error;
+
+      markEconDirty();
+      writeAuditLog('combinar', me, `${key1}+${key2}`, 0, ctx.jid);
+
+      return resultado.mensaje;
+    },
+  },
+
+  stats: {
+    desc: ' Ver tus estadísticas de aventurero completo.',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      const s = rpg.getStats(u);
+
+      let txt = `👤 *Estadísticas de Aventurero*\n\n`;
+      txt += `📛 Nombre: *${s.nombrePersonalizado}*\n`;
+      txt += `🛡️ Clase: *${s.clase}*\n`;
+      txt += `⭐ Nivel: *${s.nivel}* (EXP: ${s.exp}/${s.expSiguiente})\n`;
+      txt += `⚔️ ATK: *${s.atk}* | 🛡️ DEF: *${s.def}* | ❤️ HP: *${s.hp}*\n`;
+      txt += `💰 Efectivo: ${money(s.cash)} | 🏦 Banco: ${money(s.bank)} | 🪙 Oro RPG: ${money(s.oro)}\n`;
+      txt += `🏠 Casa: *${s.casa}* | 🏰 Gremio: *${s.gremio}*\n`;
+
+      if (s.habilidades && s.habilidades.length > 0) {
+        txt += `\n✨ Habilidades Combinadas:\n`;
+        for (const h of s.habilidades) {
+          txt += `• ${h}\n`;
+        }
+      }
+
+      if (s.misionesCompletadas && s.misionesCompletadas.length > 0) {
+        txt += `\n🏆 Misiones Completadas: ${s.misionesCompletadas.length}`;
       }
 
       return txt;
@@ -2868,7 +2937,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
