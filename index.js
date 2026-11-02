@@ -10,9 +10,12 @@ const qrcode = require('qrcode-terminal');
 const QRCode = require('qrcode');
 const pino = require('pino');
 const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const config = require('./config');
 const { imageToSticker } = require('./lib/sticker');
 const { parseFormData, ACK } = require('./lib/lobbyForm');
+const rpg = require('./lib/rpg');
 
 const SETTINGS_FILE = 'settings.json';
 const defaultSettings = {
@@ -27,6 +30,7 @@ const defaultSettings = {
   allowedChats: [],
   chats: {},
   pendingLobby: {},
+  restrictedCommands: [],
 };
 
 let settings = defaultSettings;
@@ -51,29 +55,134 @@ const saveSettings = () => {
 
 loadSettings();
 
-const ECON_FILE = 'economy.json';
-let econ = { users: {} };
+const DKS_DATA_DIR = process.env.DKS_DATA_DIR || path.join(__dirname, '..', 'dks-data');
+const ECON_FILE = path.join(DKS_DATA_DIR, 'economy.json');
+let econ = { users: {}, names: {} };
+let econDirty = false;
+let econSaveTimer = null;
 
-const loadEcon = () => {
+const ensureDataDir = () => {
   try {
-    if (fs.existsSync(ECON_FILE)) {
-      econ = { users: {}, ...JSON.parse(fs.readFileSync(ECON_FILE, 'utf8')) };
-    }
-  } catch (err) {
-    console.error('No se pudo leer economy.json:', err.message);
+    fs.mkdirSync(DKS_DATA_DIR, { recursive: true });
+  } catch (e) {
+    console.error('No se pudo crear carpeta de datos:', e.message);
   }
 };
 
+const atomicWrite = (file, data) => {
+  const tmp = file + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp, data, { encoding: 'utf8' });
+  fs.fsyncSync(fs.openSync(tmp, 'r'));
+  fs.renameSync(tmp, file);
+};
+
+const loadEcon = () => {
+  ensureDataDir();
+  let loaded = false;
+  if (fs.existsSync(ECON_FILE)) {
+    try {
+      const raw = fs.readFileSync(ECON_FILE, 'utf8');
+      econ = { users: {}, names: {}, ...JSON.parse(raw) };
+      loaded = true;
+    } catch (err) {
+      const corrupt = ECON_FILE + '.corrupt-' + Date.now() + '.json';
+      try {
+        fs.copyFileSync(ECON_FILE, corrupt);
+        console.error('Economy JSON corrupto, apartado como:', corrupt);
+      } catch (e2) {
+        console.error('No se pudo apartar economy corrupto:', e2.message);
+      }
+    }
+  }
+
+  // Migrar viejo economy.json de la carpeta del bot si existe
+  const oldEcon = path.join(__dirname, 'economy.json');
+  if (!loaded && fs.existsSync(oldEcon)) {
+    try {
+      const raw = fs.readFileSync(oldEcon, 'utf8');
+      econ = { users: {}, names: {}, ...JSON.parse(raw) };
+      loaded = true;
+      console.error('Migrado economy.json desde carpeta del bot a:', ECON_FILE);
+    } catch (err) {
+      console.error('No se pudo leer economy.json viejo:', err.message);
+    }
+  }
+
+  if (!econ.users) econ.users = {};
+  if (!econ.names) econ.names = {};
+
+  // Sanitizar: saldos negativos, NaN o texto -> 0
+  for (const [id, u] of Object.entries(econ.users)) {
+    if (!u || typeof u !== 'object') {
+      econ.users[id] = { cash: 0, bank: 0, cd: {}, dailyStreak: 0 };
+      continue;
+    }
+    if (typeof u.cash !== 'number' || !isFinite(u.cash) || u.cash < 0) u.cash = 0;
+    if (typeof u.bank !== 'number' || !isFinite(u.bank) || u.bank < 0) u.bank = 0;
+    if (!u.cd) u.cd = {};
+    if (typeof u.dailyStreak !== 'number' || !isFinite(u.dailyStreak) || u.dailyStreak < 0) u.dailyStreak = 0;
+  }
+};
+
+const markEconDirty = () => {
+  econDirty = true;
+  if (econSaveTimer) clearTimeout(econSaveTimer);
+  econSaveTimer = setTimeout(() => {
+    econSaveTimer = null;
+    if (econDirty) {
+      econDirty = false;
+      try {
+        atomicWrite(ECON_FILE, JSON.stringify(econ, null, 2));
+      } catch (err) {
+        console.error('No se pudo guardar economy:', err.message);
+      }
+    }
+  }, 200);
+};
+
 const saveEcon = () => {
-  try {
-    fs.writeFileSync(ECON_FILE, JSON.stringify(econ, null, 2));
-  } catch (err) {
-    console.error('No se pudo guardar economy.json:', err.message);
+  markEconDirty();
+};
+
+const flushEcon = () => {
+  if (econSaveTimer) {
+    clearTimeout(econSaveTimer);
+    econSaveTimer = null;
+  }
+  if (econDirty) {
+    econDirty = false;
+    try {
+      atomicWrite(ECON_FILE, JSON.stringify(econ, null, 2));
+    } catch (err) {
+      console.error('No se pudo hacer flush de economy:', err.message);
+    }
   }
 };
 
 loadEcon();
-if (!econ.names) econ.names = {};
+
+const peek = (id) => {
+  const u = econ.users && econ.users[id];
+  if (!u) return null;
+  return { cash: typeof u.cash === 'number' ? u.cash : 0, bank: typeof u.bank === 'number' ? u.bank : 0 };
+};
+
+const AUDIT_FILE = path.join(DKS_DATA_DIR, 'audit.log');
+const writeAuditLog = (action, byId, toId, amount, chatId) => {
+  try {
+    const line = JSON.stringify({
+      t: new Date().toISOString(),
+      action,
+      by: byId,
+      to: toId,
+      amount,
+      chat: chatId,
+    });
+    fs.appendFileSync(AUDIT_FILE, line + '\n');
+  } catch (e) {
+    console.error('No se pudo escribir log de auditoría:', e.message);
+  }
+};
 
 const econUser = (id) => {
   if (!econ.users[id]) econ.users[id] = { cash: 0, bank: 0, cd: {}, dailyStreak: 0 };
@@ -123,6 +232,13 @@ const fmtCooldownMsg = (ms, cmd) => {
 const cdLeft = (u, cmd, ms) => Math.max(0, (u.cd[cmd] || 0) + ms - Date.now());
 const cdSet = (u, cmd) => {
   u.cd[cmd] = Date.now();
+};
+
+const rpgLeft = (u, cmd, ms) => Math.max(0, (u.rpg.cd && u.rpg.cd[cmd] || 0) + ms - Date.now());
+const rpgCdSet = (u, cmd) => {
+  if (!u.rpg) u.rpg = {};
+  if (!u.rpg.cd) u.rpg.cd = {};
+  u.rpg.cd[cmd] = Date.now();
 };
 
 const displayName = (num) => {
@@ -388,24 +504,77 @@ const endBlackjack = (me) => {
 
   let outcome = '';
   if (dV > 21) {
+    // Banca se pasó: devolver apuesta + igual monto (2x total)
     u.cash += bet * 2;
-    saveEcon();
+    markEconDirty();
     outcome = `\n\n ¡La banca se pasó! 🎉 *Ganaste ${money(bet * 2)}.*`;
   } else if (pV > dV) {
+    // Ganar: devolver apuesta + igual monto (2x total)
     u.cash += bet * 2;
-    saveEcon();
+    markEconDirty();
     outcome = `\n\n 🎉 *Ganaste ${money(bet * 2)}.*`;
   } else if (pV === dV) {
+    // Empate: devolver solo la apuesta (1x total)
     u.cash += bet;
-    saveEcon();
+    markEconDirty();
     outcome = `\n\n 🤝 *Empate.* Te devuelven tu apuesta ${money(bet)}.`;
   } else {
-    u.cash = Math.max(0, u.cash - bet);
-    saveEcon();
+    // Perder: la apuesta ya fue descontada al inicio (custodia)
+    markEconDirty();
     outcome = `\n\n 😞 *Perdiste ${money(bet)}.*`;
   }
 
+  writeAuditLog('blackjack', me, me, bet, '');
   return `${head}${outcome}`;
+};
+
+const generarEventoMazmorra = (session) => {
+  const r = Math.random();
+  const piso = session.piso;
+
+  if (r < 0.55) {
+    // Ganas monedas
+    const base = 500 + piso * 300;
+    const ganancia = Math.floor(base * (0.8 + Math.random() * 0.4));
+    session.ganado += ganancia;
+    return {
+      mensaje: `💰 Encontraste un cofre con *${money(ganancia)}*.`,
+      tipo: 'ganar',
+    };
+  } else if (r < 0.75) {
+    // Encuentro neutral
+    const encuentros = [
+      '🗝️ Encontraste una llave antigua, no sirve para nada pero brilla.',
+      '🦴 Encontraste restos de un aventurero anterior.',
+      '🕯️ Encendiste una antorcha y el pasillo se ilumina.',
+    ];
+    return {
+      mensaje: pick(encuentros),
+      tipo: 'neutral',
+    };
+  } else if (r < 0.88) {
+    // Trampa, pierdes parte de lo ganado
+    const perdida = Math.floor(session.ganado * 0.3);
+    session.ganado = Math.max(0, session.ganado - perdida);
+    if (perdida > 0) {
+      return {
+        mensaje: `💀 Caíste en una trampa y perdiste *${money(perdida)}*.`,
+        tipo: 'trampa',
+      };
+    }
+    return {
+      mensaje: '💀 Caíste en una trampa pero no llevabas nada valioso.',
+      tipo: 'trampa',
+    };
+  } else {
+    // Monstruo, pierdes todo y termina la sesión
+    session.activo = false;
+    session.ganado = 0;
+    return {
+      mensaje: '👹 Un monstruo de la mazmorra te atacó. Perdiste todo lo ganado y la sesión terminó.',
+      tipo: 'muerte',
+    };
+  }
 };
 
 const getChatSettings = (chatId) => {
@@ -450,7 +619,9 @@ const formatTemplate = (template, vars) => {
 };
 
 const helpCategories = {
-  casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'ruleta', 'rt', 'medida', 'match', '8ball'],
+  casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'medida', 'match', '8ball'],
+  mazmorra: ['mazmorra', 'avanzar', 'retirarse'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -458,12 +629,19 @@ const helpCategories = {
 
 const helpCategoryLabels = {
   casino: '🎰 Casino, Economía y Juegos',
+  mazmorra: '🏰 Mazmorra',
+  rpg: '🗡️ RPG y Aventura',
   group: '👥 Grupo',
   admin: '🛠️ Administración',
   utility: '⚙️ Utilidad',
 };
 
 const helpAllCats = Object.keys(helpCategories);
+
+const OWNER_ONLY = ['give', 'reset-economy'];
+const HARD_RESTRICTED = ['give', 'take', 'resetdaily', 'ecolog', 'ecobackup', 'restrict'];
+const isRestricted = (cmd) =>
+  HARD_RESTRICTED.includes(cmd) || (settings.restrictedCommands || []).includes(cmd);
 
 const commands = {
   help: {
@@ -495,7 +673,7 @@ const commands = {
       helpText += `  Para cambiar categorías usá:\n`;
       helpText += `  ${prefix}sethelp <categorías>\n`;
       helpText += `  Categorías: ${helpAllCats.join(', ')}\n`;
-      helpText += `  Ej: ${prefix}sethelp casino,economy`;
+      helpText += `  Ej: ${prefix}sethelp casino,group`;
 
       return helpText;
     },
@@ -1064,118 +1242,126 @@ const commands = {
     desc: ' Ruleta de casino. Apostá con #ruleta <rojo|negro> <monto> (mínimo 1000). Se abre ronda automáticamente',
     execute: async (ctx) => {
       if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
-      if (!globalThis._ruletaGame) {
-        globalThis._ruletaGame = {
+      if (!globalThis._ruletas) globalThis._ruletas = new Map();
+      const jid = ctx.jid;
+      let g = globalThis._ruletas.get(jid);
+      if (!g) {
+        g = {
           active: false,
-          jid: null,
-          endTime: 0,
-          interval: null,
-          bets: new Map(),
           starter: null,
+          bets: new Map(),
+          timer: null,
+          endTime: 0,
         };
+        globalThis._ruletas.set(jid, g);
       }
-      const g = globalThis._ruletaGame;
       const me = getSenderId(ctx);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const sub = args[0] ? args[0].toLowerCase() : '';
+
+      const rouletteTimeout = 30000;
+      const announceTimes = [28000, 21000, 14000, 7000];
+
+      const scheduleAnnouncements = () => {
+        announceTimes.forEach((msLeft) => {
+          const delay = rouletteTimeout - msLeft;
+          setTimeout(() => {
+            if (!g.active) return;
+            const remaining = Math.max(0, g.endTime - Date.now());
+            if (remaining <= 0) return;
+            sendTo(jid, `\u200E⏳ Quedan *${Math.ceil(remaining / 1000)}s* para apostar en la ruleta.`).catch(() => {});
+          }, delay);
+        });
+      };
+
+      const resolveRuleta = async () => {
+        if (!g.active) return;
+        g.active = false;
+        if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+
+        // Girar ruleta: solo rojo o negro (1-36)
+        const winningNum = crypto.randomInt(1, 37);
+        const redNums = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
+        const winningColor = redNums.has(winningNum) ? 'rojo' : 'negro';
+
+        const lines = [];
+        let totalPayout = 0;
+        let totalBets = 0;
+
+        for (const [userId, bet] of g.bets) {
+          const u = econUser(userId);
+          totalBets += bet.amount;
+          let won = false;
+          let multiplier = 0;
+          if (bet.type === 'color' && bet.choice === winningColor) {
+            won = true;
+            multiplier = 2;
+          }
+          if (won) {
+            const payout = bet.amount * multiplier;
+            u.cash += payout;
+            totalPayout += payout;
+            lines.push(`✅ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y ganó *${money(payout)}* (x${multiplier})`);
+          } else {
+            lines.push(`❌ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y perdió.`);
+          }
+        }
+        markEconDirty();
+
+        const colorEmoji = winningColor === 'rojo' ? '🔴' : '⚫';
+        let resultMsg = `\u200E🎯 *Ruleta cerrada*\n\nNúmero ganador: ${colorEmoji} *${winningNum}* (${winningColor})\n\n`;
+        if (g.bets.size === 0) {
+          resultMsg += `Nadie apostó esta ronda.`;
+        } else {
+          resultMsg += `${lines.join('\n')}\n\nTotal apostado: *${money(totalBets)}*\nTotal pagado: *${money(totalPayout)}*`;
+        }
+        try {
+          await sendTo(jid, resultMsg);
+        } catch (e) {
+          console.error('Error enviando resultado ruleta:', e.message);
+        } finally {
+          g.active = false;
+          g.jid = null;
+          g.starter = null;
+          g.bets = new Map();
+          g.timer = null;
+          globalThis._ruletas.delete(jid);
+        }
+      };
 
       // Si no pone nada, iniciar ronda automáticamente
       if (!sub) {
         if (g.active) return `Ya hay una ruleta abierta en este grupo. Apostá con: #ruleta <rojo|negro> <monto>`;
         g.active = true;
-        g.jid = ctx.jid;
         g.starter = me;
         g.bets = new Map();
-        g.endTime = Date.now() + 30 * 1000;
+        g.endTime = Date.now() + rouletteTimeout;
 
         await sendTo(
-          ctx.jid,
+          jid,
           `\u200E🎡 *Ruleta DKS - Ronda abierta!*\n\nApostá con:\n#ruleta rojo <monto>\n#ruleta negro <monto>\n#ruleta red <monto>\n#ruleta black <monto>\nMínimo: *1000 Coins*\n\nTiempo para apostar: *30 segundos*\n¡Buena suerte! 🍀`
         );
 
-        // Avisos cada 7 segundos
-        const announce = (left) => {
-          if (!g.active) return;
-          if (left <= 0) return;
-          sendTo(ctx.jid, `\u200E⏳ Quedan *${Math.ceil(left / 1000)}s* para apostar en la ruleta.`).catch(() => {});
-        };
-        announce(28000);
-        announce(21000);
-        announce(14000);
-        announce(7000);
-
-        g.interval = setTimeout(async () => {
-          if (!g.active) return;
-          g.active = false;
-          clearTimeout(g.interval);
-          g.interval = null;
-
-          // Girar ruleta: solo rojo o negro
-          const winningNum = Math.floor(Math.random() * 36) + 1; // 1-36
-          const redNums = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
-          const blackNums = [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35];
-          let winningColor = 'rojo';
-          if (redNums.includes(winningNum)) winningColor = 'rojo';
-          if (blackNums.includes(winningNum)) winningColor = 'negro';
-
-          const lines = [];
-          let totalPayout = 0;
-          let totalBets = 0;
-
-          for (const [userId, bet] of g.bets) {
-            const u = econUser(userId);
-            totalBets += bet.amount;
-            let won = false;
-            let multiplier = 0;
-            if (bet.type === 'color') {
-              if (bet.choice === winningColor) {
-                won = true;
-                multiplier = 2;
-              }
-            }
-            if (won) {
-              const payout = bet.amount * multiplier;
-              u.cash += payout;
-              totalPayout += payout;
-              lines.push(`✅ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y ganó *${money(payout)}* (x${multiplier})`);
-            } else {
-              u.cash = Math.max(0, u.cash - bet.amount);
-              lines.push(`❌ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y perdió.`);
-            }
-          }
-          saveEcon();
-
-          const colorEmoji = winningColor === 'rojo' ? '🔴' : '⚫';
-          let resultMsg = `\u200E🎯 *Ruleta cerrada*\n\nNúmero ganador: ${colorEmoji} *${winningNum}* (${winningColor})\n\n`;
-          if (g.bets.size === 0) {
-            resultMsg += `Nadie apostó esta ronda.`;
-          } else {
-            resultMsg += `${lines.join('\n')}\n\nTotal apostado: *${money(totalBets)}*\nTotal pagado: *${money(totalPayout)}*`;
-          }
-          try {
-            await sendTo(ctx.jid, resultMsg);
-          } catch (e) {
-            console.error('Error enviando resultado ruleta:', e.message);
-          } finally {
-            g.active = false;
-            g.jid = null;
-            g.starter = null;
-            g.bets = new Map();
-            g.interval = null;
-          }
-        }, 30000);
-
+        scheduleAnnouncements();
+        g.timer = setTimeout(resolveRuleta, rouletteTimeout);
         return null;
       }
 
-      // Detener ronda anticipadamente (solo starter o admin)
+      // Detener ronda anticipadamente (solo starter o admin) - devuelve todas las apuestas
       if (sub === 'stop') {
         if (!g.active) return 'No hay ninguna ruleta activa en este grupo.';
         if (me !== g.starter && !(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo quien inició la ronda o un admin puede detenerla.';
-        clearTimeout(g.interval);
+        if (g.timer) { clearTimeout(g.timer); g.timer = null; }
+        // Devolver todas las apuestas
+        for (const [userId, bet] of g.bets) {
+          const u = econUser(userId);
+          u.cash += bet.amount;
+        }
+        markEconDirty();
         g.active = false;
-        g.interval = null;
-        await sendTo(ctx.jid, '\u200E🛑 La ruleta fue detenida anticipadamente. Nadie ganó ni perdió.');
+        g.bets = new Map();
+        globalThis._ruletas.delete(jid);
+        await sendTo(jid, '\u200E🛑 La ruleta fue detenida. Todas las apuestas fueron devueltas.');
         return null;
       }
 
@@ -1213,93 +1399,24 @@ const commands = {
       if (amount > u.cash) return 'No tienes suficiente dinero para esa apuesta.';
 
       // Si no hay ronda activa, iniciarla automáticamente al apostar
-      if (!g.active || g.jid !== ctx.jid) {
+      if (!g.active) {
         g.active = true;
-        g.jid = ctx.jid;
         g.starter = me;
         g.bets = new Map();
-        g.endTime = Date.now() + 30 * 1000;
+        g.endTime = Date.now() + rouletteTimeout;
 
         await sendTo(
-          ctx.jid,
+          jid,
           `\u200E🎡 *Ruleta DKS - Ronda abierta!*\n\nApostá con:\n#ruleta rojo <monto>\n#ruleta negro <monto>\n#ruleta red <monto>\n#ruleta black <monto>\nMínimo: *1000 Coins*\n\nTiempo para apostar: *30 segundos*\n¡Buena suerte! 🍀`
         );
 
-        // Avisos cada 7 segundos
-        const announce = (left) => {
-          if (!g.active) return;
-          if (left <= 0) return;
-          sendTo(ctx.jid, `\u200E⏳ Quedan *${Math.ceil(left / 1000)}s* para apostar en la ruleta.`).catch(() => {});
-        };
-        announce(28000);
-        announce(21000);
-        announce(14000);
-        announce(7000);
-
-        g.interval = setTimeout(async () => {
-          if (!g.active) return;
-          g.active = false;
-          clearTimeout(g.interval);
-          g.interval = null;
-
-          // Girar ruleta: solo rojo o negro
-          const winningNum = Math.floor(Math.random() * 36) + 1; // 1-36
-          const redNums = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
-          const blackNums = [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35];
-          let winningColor = 'rojo';
-          if (redNums.includes(winningNum)) winningColor = 'rojo';
-          if (blackNums.includes(winningNum)) winningColor = 'negro';
-
-          const lines = [];
-          let totalPayout = 0;
-          let totalBets = 0;
-
-          for (const [userId, bet] of g.bets) {
-            const u = econUser(userId);
-            totalBets += bet.amount;
-            let won = false;
-            let multiplier = 0;
-            if (bet.type === 'color') {
-              if (bet.choice === winningColor) {
-                won = true;
-                multiplier = 2;
-              }
-            }
-            if (won) {
-              const payout = bet.amount * multiplier;
-              u.cash += payout;
-              totalPayout += payout;
-              lines.push(`✅ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y ganó *${money(payout)}* (x${multiplier})`);
-            } else {
-              u.cash = Math.max(0, u.cash - bet.amount);
-              lines.push(`❌ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y perdió.`);
-            }
-          }
-          saveEcon();
-
-          const colorEmoji = winningColor === 'rojo' ? '🔴' : '⚫';
-          let resultMsg = `\u200E🎯 *Ruleta cerrada*\n\nNúmero ganador: ${colorEmoji} *${winningNum}* (${winningColor})\n\n`;
-          if (g.bets.size === 0) {
-            resultMsg += `Nadie apostó esta ronda.`;
-          } else {
-            resultMsg += `${lines.join('\n')}\n\nTotal apostado: *${money(totalBets)}*\nTotal pagado: *${money(totalPayout)}*`;
-          }
-          try {
-            await sendTo(ctx.jid, resultMsg);
-          } catch (e) {
-            console.error('Error enviando resultado ruleta:', e.message);
-          } finally {
-            g.active = false;
-            g.jid = null;
-            g.starter = null;
-            g.bets = new Map();
-            g.interval = null;
-          }
-        }, 30000);
+        scheduleAnnouncements();
+        g.timer = setTimeout(resolveRuleta, rouletteTimeout);
       }
 
+      // Descontar apuesta una sola vez al apostar
       u.cash = Math.max(0, u.cash - amount);
-      saveEcon();
+      markEconDirty();
       g.bets.set(me, { type: 'color', choice, amount });
 
       const emoji = choice === 'rojo' ? '🔴' : '⚫';
@@ -1313,7 +1430,7 @@ const commands = {
       if (!globalThis._bj) globalThis._bj = {};
       const me = getSenderId(ctx);
       if (globalThis._bj[me]) {
-        return 'Ya tenés una partida en curso. Usá #pedir (otra carta) o #plantarme (cerrar).';
+        return 'Ya tenés una partida en curso. Usá #pedir (otra carta), #plantarme (cerrar) o #doblar (duplicar apuesta y una carta).';
       }
 
       const u = econUser(me);
@@ -1327,18 +1444,61 @@ const commands = {
       if (!bet || bet < 1000) return 'La apuesta mínima es de *1000 Coins*.';
       if (bet > u.cash) return 'No tienes suficiente dinero para esa apuesta.';
 
+      // Custodia: descontar apuesta al empezar
+      u.cash = Math.max(0, u.cash - bet);
+      markEconDirty();
+
       const deck = buildDeck();
       const player = [deck.pop(), deck.pop()];
       const dealer = [deck.pop(), deck.pop()];
-      globalThis._bj[me] = { deck, player, dealer, bet };
+      globalThis._bj[me] = {
+        deck, player, dealer, bet,
+        started: Date.now(),
+        doubled: false,
+      };
 
       const pV = handValue(player);
       if (pV === 21) {
-        const msgTxt = endBlackjack(me);
-        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(player)} = *21*\n *Apuesta:* *${money(bet)}*\n\n¡BLACKJACK! 🎉 ${msgTxt}`;
+        // Blackjack natural paga 3:2
+        const win = Math.floor(bet * 1.5);
+        const payout = bet + win;
+        u.cash += payout;
+        markEconDirty();
+        delete globalThis._bj[me];
+        writeAuditLog('blackjack', me, me, bet, ctx.jid);
+        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(player)} = *21*\n *Apuesta:* *${money(bet)}*\n\n¡BLACKJACK! 🎉 *Ganaste ${money(payout)}* (3:2)`;
       }
 
-      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(player)} = *${pV}*\n *Apuesta:* *${money(bet)}*\n\n *Banca:* ${formatHand([dealer[0]])} 🂠 = *${handValue([dealer[0]])}*\n\n ¿*#pedir* otra carta o te *#plantas*?`;
+      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(player)} = *${pV}*\n *Apuesta:* *${money(bet)}*\n\n *Banca:* ${formatHand([dealer[0]])} 🂠 = *${handValue([dealer[0]])}*\n\n ¿*#pedir* otra carta, te *#plantas* o *#doblar*?`;
+    },
+  },
+
+  doblar: {
+    desc: ' Duplicar apuesta y recibir una carta más en el Blackjack',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      if (!globalThis._bj || !globalThis._bj[me]) return 'No tenés partida en curso. Escribí #bj para comenzar.';
+      const game = globalThis._bj[me];
+      if (game.doubled) return 'Ya duplicaste tu apuesta en esta partida.';
+      if (game.player.length !== 2) return 'Solo podés doblar con las dos cartas iniciales.';
+      const u = econUser(me);
+      if (u.cash < game.bet) return 'No tienes suficiente dinero para duplicar.';
+      u.cash = Math.max(0, u.cash - game.bet);
+      game.bet *= 2;
+      game.doubled = true;
+      markEconDirty();
+      game.player.push(game.deck.pop());
+      const v = handValue(game.player);
+      if (v > 21) {
+        delete globalThis._bj[me];
+        writeAuditLog('blackjack', me, me, game.bet, ctx.jid);
+        return ` 🃏 *Blackjack - Doblado*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n *Apuesta:* *${money(game.bet)}*\n\n Te pasaste de 21... 💥 *Perdiste ${money(game.bet)}.*`;
+      }
+      if (v === 21) {
+        const res = endBlackjack(me);
+        return ` 🃏 *Blackjack - Doblado*\n\n *Tú:* ${formatHand(game.player)} = *21*\n *Apuesta:* *${money(game.bet)}*\n\n ¡21! 🎉\n\n${res}`;
+      }
+      return ` 🃏 *Blackjack DKS - Doblado*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n *Apuesta:* *${money(game.bet)}*\n\n *Banca:* ${formatHand([game.dealer[0]])} 🂠 = *${handValue([game.dealer[0]])}*\n\n ¿*#pedir* otra carta o te *#plantas*?`;
     },
   },
 
@@ -1352,9 +1512,8 @@ const commands = {
       const v = handValue(game.player);
       if (v > 21) {
         const u = econUser(me);
-        u.cash = Math.max(0, u.cash - game.bet);
-        saveEcon();
         delete globalThis._bj[me];
+        writeAuditLog('blackjack', me, me, game.bet, ctx.jid);
         return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n *Apuesta:* *${money(game.bet)}*\n\n Te pasaste de 21... 💥 *Perdiste ${money(game.bet)}.*`;
       }
       if (v === 21) {
@@ -1373,6 +1532,483 @@ const commands = {
       if (!game) return 'No tenés partida en curso. Escribí #bj para comenzar.';
       const result = endBlackjack(me);
       return ` 🃏 *Blackjack*\n\n${result}`;
+    },
+  },
+
+  mazmorra: {
+    desc: ' Entrá a la mazmorra. Uso: #mazmorra <apuesta> (mínimo 1000)',
+    execute: async (ctx) => {
+      if (!globalThis._mazmorra) globalThis._mazmorra = new Map();
+      const me = getSenderId(ctx);
+      if (globalThis._mazmorra.has(me)) {
+        return 'Ya tenés una sesión de mazmorra activa. Usá #avanzar o #retirarse.';
+      }
+      const u = econUser(me);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const betArg = args[0];
+      let bet;
+      if (!betArg) return 'Uso: #mazmorra <apuesta> (mínimo 1000 Coins). Ej: #mazmorra 1000';
+      if (betArg === 'all' || betArg === 'todo') bet = u.cash;
+      else if (/^\d+$/.test(betArg)) bet = parseInt(betArg, 10);
+      else return 'Uso: #mazmorra <apuesta> (mínimo 1000 Coins). Ej: #mazmorra 1000';
+      if (!bet || bet < 1000) return 'La apuesta mínima es de *1000 Coins*.';
+      if (bet > u.cash) return 'No tienes suficiente dinero para entrar.';
+
+      u.cash = Math.max(0, u.cash - bet);
+      markEconDirty();
+
+      const session = {
+        bet,
+        piso: 1,
+        ganado: 0,
+        activo: true,
+        started: Date.now(),
+      };
+      globalThis._mazmorra.set(me, session);
+
+      const evento = generarEventoMazmorra(session);
+      return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Apuesta:* *${money(bet)}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
+    },
+  },
+
+  avanzar: {
+    desc: ' Avanza al siguiente piso de la mazmorra',
+    execute: async (ctx) => {
+      if (!globalThis._mazmorra) return 'No tenés sesión activa. Escribí #mazmorra para entrar.';
+      const me = getSenderId(ctx);
+      const session = globalThis._mazmorra.get(me);
+      if (!session || !session.activo) return 'No tenés una sesión de mazmorra activa. Escribí #mazmorra para entrar.';
+
+      session.piso += 1;
+      const evento = generarEventoMazmorra(session);
+
+      if (!session.activo) {
+        globalThis._mazmorra.delete(me);
+        markEconDirty();
+        return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó. Perdiste todo lo ganado.*`;
+      }
+
+      markEconDirty();
+      return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
+    },
+  },
+
+  retirarse: {
+    desc: ' Sale de la mazmorra con lo ganado',
+    execute: async (ctx) => {
+      if (!globalThis._mazmorra) return 'No tenés sesión activa.';
+      const me = getSenderId(ctx);
+      const session = globalThis._mazmorra.get(me);
+      if (!session || !session.activo) return 'No tenés una sesión de mazmorra activa.';
+
+      const u = econUser(me);
+      u.cash += session.ganado;
+      markEconDirty();
+      globalThis._mazmorra.delete(me);
+
+      return ` 🏰 *Mazmorra DKS - Retirada*\n *Pisos superados:* ${session.piso - 1}\n *Ganado:* *${money(session.ganado)}*\n *Total recuperado:* *${money(session.ganado)}*`;
+    },
+  },
+
+  clase: {
+    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const clase = args[0] ? args[0].toLowerCase() : '';
+      if (!rpg.CLASSES[clase]) {
+        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}`;
+      }
+      if (u.rpg.clase) return `Ya tienes la clase *${rpg.classLabel(u.rpg.clase)}*.`;
+      u.rpg.clase = clase;
+      u.rpg.nivel = 1;
+      u.rpg.exp = 0;
+      markEconDirty();
+      return `✅ ¡Eres ahora *${rpg.classLabel(clase)}*! ${rpg.CLASSES[clase].desc}`;
+    },
+  },
+
+  armas: {
+    desc: ' Ver tus armas equipadas y disponibles. Uso: #armas',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const equipada = rpg.weaponLabel(u.rpg.arma);
+      const lista = u.rpg.armas.map((a) => `• ${rpg.weaponLabel(a)}`).join('\n');
+      return `🗡️ *Tus Armas*\nEquipada: *${equipada}*\n${lista}`;
+    },
+  },
+
+  herrero: {
+    desc: ' Forjar o mejorar armas. Uso: #herrero forjar <arma> | #herrero mejorar <arma>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const accion = args[0] ? args[0].toLowerCase() : '';
+      const arma = args[1] ? args[1].toLowerCase() : '';
+
+      if (!rpg.WEAPONS[arma]) return 'Arma no válida. Disponibles: ' + Object.keys(rpg.WEAPONS).filter((k) => k !== 'nada').join(', ');
+
+      if (accion === 'forjar') {
+        const w = rpg.WEAPONS[arma];
+        if (u.rpg.armas.includes(arma)) return 'Ya tienes esta arma.';
+        if (u.cash < w.precio) return `No tienes suficiente dinero. Precio: ${money(w.precio)}`;
+        u.cash = Math.max(0, u.cash - w.precio);
+        u.rpg.armas.push(arma);
+        markEconDirty();
+        return `✅ Forjaste *${w.nombre}* por ${money(w.precio)}.`;
+      }
+
+      if (accion === 'mejorar') {
+        if (!u.rpg.armas.includes(arma)) return 'No tienes esa arma.';
+        const w = rpg.WEAPONS[arma];
+        const costo = Math.floor(w.precio * 0.5);
+        if (u.cash < costo) return `No tienes suficiente dinero. Costo de mejora: ${money(costo)}`;
+        // Mejora: subir atk en 2
+        const mejorada = arma + '_mejorada';
+        if (!rpg.WEAPONS[mejorada]) {
+          rpg.WEAPONS[mejorada] = { nombre: w.nombre + ' +', atk: w.atk + 2, precio: w.precio * 2 };
+        }
+        u.cash = Math.max(0, u.cash - costo);
+        const idx = u.rpg.armas.indexOf(arma);
+        u.rpg.armas[idx] = mejorada;
+        if (u.rpg.arma === arma) u.rpg.arma = mejorada;
+        markEconDirty();
+        return `✨ Mejoraste *${w.nombre}* a *${rpg.WEAPONS[mejorada].nombre}* por ${money(costo)}.`;
+      }
+
+      return 'Uso: #herrero forjar <arma> | #herrero mejorar <arma>';
+    },
+  },
+
+  pescar: {
+    desc: ' Pescar para ganar monedas o objetos. Uso: #pescar (tiene espera)',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const left = rpgLeft(u, 'pescar', 3 * 60 * 1000);
+      if (left > 0) return fmtCooldownMsg(left, 'pescar');
+      const r = Math.random();
+      let ganancia = 0;
+      let mensaje = '';
+      if (r < 0.6) {
+        ganancia = rand(200, 800);
+        u.cash += ganancia;
+        mensaje = `🎣 Pescaste un pez y lo vendiste por ${money(ganancia)}.`;
+      } else if (r < 0.85) {
+        ganancia = rand(500, 1500);
+        u.cash += ganancia;
+        mensaje = `🎣 Pescaste un pez dorado y lo vendiste por ${money(ganancia)}.`;
+      } else {
+        mensaje = '🎣 No pescaste nada esta vez.';
+      }
+      rpgCdSet(u, 'pescar');
+      markEconDirty();
+      return mensaje;
+    },
+  },
+
+  minar: {
+    desc: ' Minar minerales para vender. Uso: #minar (tiene espera)',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const left = rpgLeft(u, 'minar', 4 * 60 * 1000);
+      if (left > 0) return fmtCooldownMsg(left, 'minar');
+      const r = Math.random();
+      let ganancia = 0;
+      let mensaje = '';
+      if (r < 0.6) {
+        ganancia = rand(300, 1000);
+        u.cash += ganancia;
+        u.rpg.minerales += ganancia;
+        mensaje = `⛏️ Minaste mineral y lo vendiste por ${money(ganancia)}.`;
+      } else if (r < 0.85) {
+        ganancia = rand(800, 2000);
+        u.cash += ganancia;
+        u.rpg.minerales += ganancia;
+        mensaje = `⛏️ Encontraste una veta rica y la vendiste por ${money(ganancia)}.`;
+      } else {
+        mensaje = '⛏️ No encontraste nada valioso.';
+      }
+      rpgCdSet(u, 'minar');
+      markEconDirty();
+      return mensaje;
+    },
+  },
+
+  gremio: {
+    desc: ' Gremio: crear, unirse o ver info. Uso: #gremio <crear|unirse|ver> <nombre>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      rpg.ensureGuild(settings);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const accion = args[0] ? args[0].toLowerCase() : '';
+      const nombre = args.slice(1).join(' ');
+
+      if (accion === 'crear') {
+        if (!nombre) return 'Uso: #gremio crear <nombre>';
+        if (u.rpg.gremio) return 'Ya estás en un gremio.';
+        for (const gid of Object.keys(settings.guilds)) {
+          const g = settings.guilds[gid];
+          if (g.miembros.includes(me)) return 'Ya estás en un gremio.';
+        }
+        if (u.cash < 10000) return 'Cuesta ¥10,000 crear un gremio.';
+        u.cash = Math.max(0, u.cash - 10000);
+        const gid = 'g_' + Date.now();
+        settings.guilds[gid] = { nombre, lider: me, miembros: [me], creado: Date.now() };
+        u.rpg.gremio = gid;
+        markEconDirty();
+        saveSettings();
+        return `✅ Gremio *${nombre}* creado. Eres el líder.`;
+      }
+
+      if (accion === 'unirse') {
+        if (!nombre) return 'Uso: #gremio unirse <nombre>';
+        if (u.rpg.gremio) return 'Ya estás en un gremio.';
+        let encontrado = null;
+        for (const gid of Object.keys(settings.guilds)) {
+          if (settings.guilds[gid].nombre.toLowerCase() === nombre.toLowerCase()) {
+            encontrado = gid;
+            break;
+          }
+        }
+        if (!encontrado) return 'Gremio no encontrado.';
+        settings.guilds[encontrado].miembros.push(me);
+        u.rpg.gremio = encontrado;
+        markEconDirty();
+        saveSettings();
+        return `✅ Te uniste al gremio *${settings.guilds[encontrado].nombre}*.`;
+      }
+
+      if (accion === 'ver') {
+        if (!u.rpg.gremio) return 'No estás en un gremio.';
+        const g = settings.guilds[u.rpg.gremio];
+        if (!g) return 'Tu gremio ya no existe.';
+        const rank = rpg.getGuildRank(u.rpg.oro || 0);
+        return `🏰 *Gremio: ${g.nombre}*\nLíder: ${rpg.classLabel(g.lider) ? '' : ''}\nMiembros: ${g.miembros.length}\nTu rango: *${rank.nombre}*`;
+      }
+
+      return 'Uso: #gremio <crear|unirse|ver> <nombre>';
+    },
+  },
+
+  rango: {
+    desc: ' Ver tu rango en el gremio.',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      if (!u.rpg.gremio) return 'No estás en un gremio.';
+      const g = settings.guilds && settings.guilds[u.rpg.gremio];
+      if (!g) return 'Tu gremio ya no existe.';
+      const rank = rpg.getGuildRank(u.rpg.oro || 0);
+      return `🏅 *Rango en ${g.nombre}:* *${rank.nombre}* (Oro: ${money(u.rpg.oro || 0)})`;
+    },
+  },
+
+  npc: {
+    desc: ' Hablar con NPCs de la ciudad. Uso: #npc <herrero|posadero|comerciante>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const tipo = args[0] ? args[0].toLowerCase() : '';
+      if (tipo === 'herrero') return '⚒️ Herrero: "Puedo forjar y mejorar tus armas. Usa #herrero".';
+      if (tipo === 'posadero') return '🏨 Posadero: "Descansa en la posada por ¥500 y recupera energía.".';
+      if (tipo === 'comerciante') return '🛒 Comerciante: "Vendo objetos mágicos. Pronto tendré más stock.".';
+      return 'NPCs disponibles: herrero, posadero, comerciante.';
+    },
+  },
+
+  nombre: {
+    desc: ' Establece tu nombre de aventurero. Uso: #nombre <tu nombre>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const nombre = args.join(' ');
+      if (!nombre) return 'Uso: #nombre <tu nombre>';
+      if (nombre.length > 30) return 'El nombre es muy largo (máximo 30 caracteres).';
+      u.rpg.nombrePersonalizado = nombre;
+      markEconDirty();
+      return `✅ Nombre de aventurero establecido: *${nombre}*.`;
+    },
+  },
+
+  casa: {
+    desc: ' Compra una casa con beneficios. Uso: #casa <choza|cabaña|casa|mansión|castillo>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const key = args[0] ? args[0].toLowerCase() : '';
+      const house = rpg.getHouseBenefit(key);
+      if (!house) return 'Casas disponibles: ' + Object.keys(rpg.HOUSES).join(', ');
+      if (u.rpg.casa) return `Ya tienes una casa: *${rpg.getHouseBenefit(u.rpg.casa).nombre}*.`;
+      if (u.cash < house.precio) return `No tienes suficiente dinero. Precio: ${money(house.precio)}`;
+      u.cash = Math.max(0, u.cash - house.precio);
+      u.rpg.casa = key;
+      markEconDirty();
+      return `✅ Compraste *${house.nombre}* por ${money(house.precio)}.`;
+    },
+  },
+
+  contratar: {
+    desc: ' Contrata un aventurero para trabajar por ti. Uso: #contratar',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const costo = 5000;
+      if (u.rpg.aventureros.length >= 3) return 'Ya tienes la cantidad máxima de aventureros (3).';
+      if (u.cash < costo) return `No tienes suficiente dinero. Costo: ${money(costo)}.`;
+      u.cash = Math.max(0, u.cash - costo);
+      const aventurero = { nombre: 'Aventurero #' + (u.rpg.aventureros.length + 1), contratado: Date.now() };
+      u.rpg.aventureros.push(aventurero);
+      markEconDirty();
+      return `🤝 Contrataste a *${aventurero.nombre}* por ${money(costo)}.`;
+    },
+  },
+
+  aprendiz: {
+    desc: ' Forma un aprendiz para ayudarte. Uso: #aprendiz',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const costo = 10000;
+      if (u.rpg.aprendiz) return 'Ya tienes un aprendiz.';
+      if (u.cash < costo) return `No tienes suficiente dinero. Costo: ${money(costo)}.`;
+      u.cash = Math.max(0, u.cash - costo);
+      u.rpg.aprendiz = { nombre: 'Aprendiz', contratado: Date.now(), nivel: 1 };
+      markEconDirty();
+      return `👦 Formaste a un *Aprendiz* por ${money(costo)}.`;
+    },
+  },
+
+  misiones: {
+    desc: ' Ver misiones disponibles. Uso: #misiones',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const disponibles = rpg.getAvailableMissions(u.rpg.nivel);
+      let txt = `📋 *Misiones disponibles (Nivel ${u.rpg.nivel}):*\n\n`;
+      for (const m of disponibles) {
+        const yaActiva = u.rpg.misiones[m.key] ? ' (activa)' : '';
+        txt += `• *${m.nombre}* — ${m.objetivo}\n   💰 ${money(m.recompensa)} | ⭐ ${m.exp} EXP | Dificultad ${m.dificultad}${yaActiva}\n`;
+      }
+      if (Object.keys(u.rpg.misiones).length > 0) {
+        txt += `\n📌 *Misiones activas:*\n`;
+        for (const [k, m] of Object.entries(u.rpg.misiones)) {
+          txt += `• ${k}: progreso ${m.progreso}\n`;
+        }
+      }
+      return txt;
+    },
+  },
+
+  mision: {
+    desc: ' Aceptar una misión. Uso: #mision <clave>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const clave = args[0] ? args[0].toLowerCase() : '';
+      if (!clave) return 'Uso: #mision <clave>';
+      const m = rpg.startMission(u, clave);
+      if (!m) return 'No se pudo aceptar esa misión (ya la tienes o no existe).';
+      markEconDirty();
+      return `📜 Misión aceptada: *${m.nombre}*\nObjetivo: ${m.objetivo}\nRecompensa: ${money(m.recompensa)} + ${m.exp} EXP`;
+    },
+  },
+
+  combate: {
+    desc: ' Inicia un combate contra un enemigo. Uso: #combate <enemigo>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      if (u.rpg.combate) return 'Ya estás en un combate. Usá #pelear para atacar.';
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const clave = args[0] ? args[0].toLowerCase() : '';
+      if (!rpg.ENEMIES[clave]) {
+        return `Enemigos disponibles: ${Object.keys(rpg.ENEMIES).join(', ')}`;
+      }
+      const enemy = rpg.startCombat(u, clave);
+      markEconDirty();
+      return `⚔️ *Combate iniciado contra ${enemy.nombre}*\nHP enemigo: ${enemy.hp}/${enemy.hp}\nUsá #pelear para atacar.`;
+    },
+  },
+
+  pelear: {
+    desc: ' Ataca en el combate actual. Uso: #pelear',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      if (!u.rpg.combate) return 'No estás en un combate. Usá #combate <enemigo> para iniciar.';
+      const result = rpg.combatTurn(u, 'atacar');
+      markEconDirty();
+      let txt = `⚔️ *Combate*\n${result.resultado}`;
+      if (result.terminado) {
+        txt += `\n🏆 Combate terminado.`;
+      }
+      return txt;
+    },
+  },
+
+  estado: {
+    desc: ' Ver tu estado de aventurero completo.',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const clase = u.rpg.clase ? rpg.classLabel(u.rpg.clase) : 'Sin clase';
+      const arma = rpg.weaponLabel(u.rpg.arma);
+      const casa = u.rpg.casa ? rpg.getHouseBenefit(u.rpg.casa).nombre : 'Ninguna';
+      const rank = rpg.getGuildRank(u.rpg.oro || 0);
+      const gremio = u.rpg.gremio ? (settings.guilds && settings.guilds[u.rpg.gremio] ? settings.guilds[u.rpg.gremio].nombre : 'Desconocido') : 'Ninguno';
+      return `👤 *Estado de Aventurero*\nClase: *${clase}*\nNivel: *${u.rpg.nivel}* (EXP: ${u.rpg.exp}/${u.rpg.nivel * 100})\nArma: *${arma}*\nCasa: *${casa}*\nGremio: *${gremio}*\nRango: *${rank.nombre}*\nOro RPG: ${money(u.rpg.oro || 0)}\n${u.rpg.nombrePersonalizado ? `Nombre: *${u.rpg.nombrePersonalizado}*\n` : ''}`;
+    },
+  },
+
+  'dungeon-start': {
+    desc: ' Tutorial de la mazmorra. Obtén equipamiento inicial para comenzar tu aventura.',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (u.rpg.tutorialCompletado) {
+        return 'Ya completaste el tutorial de la mazmorra. Usá #mazmorra para entrar.';
+      }
+
+      // Regalo inicial: espada de hierro + 2000 Coins
+      const bonoOro = 2000;
+      u.cash += bonoOro;
+      if (!u.rpg.armas.includes('espada_hierro')) {
+        u.rpg.armas.push('espada_hierro');
+      }
+      if (u.rpg.arma === 'nada') {
+        u.rpg.arma = 'espada_hierro';
+      }
+      u.rpg.tutorialCompletado = true;
+      markEconDirty();
+
+      return ` 🏰 *Tutorial de la Mazmorra DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${rpg.weaponLabel('espada_hierro')}* (ATK +8).\n\n📖 *Cómo jugar:*\n• Escribí #mazmorra <apuesta> para entrar a la mazmorra (mínimo 1000 Coins).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir con lo ganado.\n• Cuidado: si un monstruo te derrota, pierdes todo lo ganado en la sesión.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
     },
   },
 
@@ -1481,6 +2117,24 @@ const commands = {
       }
       saveEcon();
       return `✅ Daily reiniciado para *${reseteados}* usuario(s) con menos de ${money(30000)}.`;
+    },
+  },
+
+  'reset-economy': {
+    desc: ' 🔒 (solo el creador del bot) Reinicia TODO el dinero de todos los usuarios a 0.',
+    execute: async (ctx) => {
+      if (!isOwner(ctx)) return '🔒 Solo el creador del bot puede usar este comando.';
+      let reseteados = 0;
+      for (const [id, u] of Object.entries(econ.users)) {
+        if (u.cash !== 0 || u.bank !== 0) {
+          u.cash = 0;
+          u.bank = 0;
+          reseteados++;
+        }
+      }
+      markEconDirty();
+      writeAuditLog('reset-economy', getSenderId(ctx), 'todos', 0, ctx.jid);
+      return `💸 Economía reiniciada para *${reseteados}* usuario(s). Todo el dinero se ha establecido a 0.`;
     },
   },
 
@@ -1605,35 +2259,47 @@ const commands = {
   },
 
   give: {
-    desc: ' Regalá dinero a alguien. Uso: #give @usuario <monto>',
+    desc: ' 🔒 (solo el creador del bot) Crea dinero para alguien. Uso: #give @usuario <monto>',
     execute: async (ctx) => {
+      if (!isOwner(ctx)) return '🔒 Solo el creador del bot puede usar este comando.';
       const target = getTargetUser(ctx);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const amountArg = args.length ? args[args.length - 1] : '';
-      if (!target || !/^\d+$/.test(amountArg) || parseInt(amountArg, 10) <= 0) {
+      if (!target || !/^\d+$/.test(amountArg)) {
         return 'Uso: #give @usuario <monto>';
       }
-      const amount = parseInt(amountArg, 10);
+      let amount = parseInt(amountArg, 10);
+      amount = Math.min(amount, 1e12);
+      if (!amount || amount <= 0) {
+        return 'Monto inválido.';
+      }
       econUser(target).cash += amount;
-      saveEcon();
+      markEconDirty();
+      writeAuditLog('give', getSenderId(ctx), target, amount, ctx.jid);
       return `✿ Le diste *${money(amount)}* a *${displayName(target)}*.`;
     },
   },
 
   take: {
-    desc: ' Quitá dinero a alguien. Uso: #take @usuario <monto>',
+    desc: ' 🔒 (solo usuarios autorizados) Quitá dinero a alguien. Uso: #take @usuario <monto>',
     execute: async (ctx) => {
+      if (!hasPermission(ctx)) return '🔒 Solo los usuarios autorizados pueden usar este comando.';
       const target = getTargetUser(ctx);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const amountArg = args.length ? args[args.length - 1] : '';
-      if (!target || !/^\d+$/.test(amountArg) || parseInt(amountArg, 10) <= 0) {
+      if (!target || !/^\d+$/.test(amountArg)) {
         return 'Uso: #take @usuario <monto>';
       }
-      const amount = parseInt(amountArg, 10);
+      let amount = parseInt(amountArg, 10);
+      amount = Math.min(amount, 1e12);
+      if (!amount || amount <= 0) {
+        return 'Monto inválido.';
+      }
       const t = econUser(target);
       const taken = Math.min(amount, t.cash);
       t.cash = Math.max(0, t.cash - taken);
-      saveEcon();
+      markEconDirty();
+      writeAuditLog('take', getSenderId(ctx), target, taken, ctx.jid);
       return `✿ Le quitaste *${money(taken)}* a *${displayName(target)}*.`;
     },
   },
@@ -1759,6 +2425,73 @@ const commands = {
       return ` *Chats habilitados:*\n\n${lines.join('\n')}`;
     },
   },
+
+  restrict: {
+    desc: ' 🔒 (solo dueño) Agrega/quita/lista comandos restringidos. Uso: #restrict add|del|list <comando>',
+    execute: async (ctx) => {
+      if (!isOwner(ctx)) return '🔒 Solo el creador del bot puede usar este comando.';
+      settings.restrictedCommands = settings.restrictedCommands || [];
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const action = args[0] ? args[0].toLowerCase() : '';
+      const cmd = args[1] ? args[1].toLowerCase() : '';
+
+      if (action === 'list') {
+        const list = settings.restrictedCommands.length
+          ? settings.restrictedCommands.join(', ')
+          : '*Ninguno*';
+        return ` *Comandos restringidos:*\n\n${list}`;
+      }
+
+      if (!cmd) {
+        return `Uso: ${config.prefix}restrict add <comando> | ${config.prefix}restrict del <comando> | ${config.prefix}restrict list`;
+      }
+
+      // Resolver alias
+      const resolvedCmd = commandAliases[cmd] || cmd;
+      if (!commands[resolvedCmd]) return 'Comando no existe.';
+
+      // Los comandos hard-restrict no se pueden desbloquear
+      if (action === 'del' && HARD_RESTRICTED.includes(resolvedCmd)) {
+        return `⚠️ El comando ${resolvedCmd} no se puede desbloquear.`;
+      }
+
+      if (action === 'add') {
+        if (settings.restrictedCommands.includes(resolvedCmd)) {
+          return `⚠️ ${resolvedCmd} ya está restringido.`;
+        }
+        settings.restrictedCommands.push(resolvedCmd);
+        saveSettings();
+        return `✅ ${resolvedCmd} agregado a comandos restringidos.`;
+      }
+
+      if (action === 'del') {
+        const idx = settings.restrictedCommands.indexOf(resolvedCmd);
+        if (idx === -1) return `⚠️ ${resolvedCmd} no está restringido.`;
+        settings.restrictedCommands.splice(idx, 1);
+        saveSettings();
+        return `🗑️ ${resolvedCmd} removido de comandos restringidos.`;
+      }
+
+      return `Uso: ${config.prefix}restrict add <comando> | ${config.prefix}restrict del <comando> | ${config.prefix}restrict list`;
+    },
+  },
+
+  ecolog: {
+    desc: ' 🔒 (solo autorizados) Muestra las últimas 10 líneas del log de auditoría de economía.',
+    execute: async (ctx) => {
+      if (!hasPermission(ctx)) return '🔒 Solo los usuarios autorizados pueden usar este comando.';
+      const AUDIT_FILE = path.join(DKS_DATA_DIR, 'audit.log');
+      if (!fs.existsSync(AUDIT_FILE)) return 'No hay registros de auditoría.';
+      try {
+        const lines = fs.readFileSync(AUDIT_FILE, 'utf8').trim().split('\n').filter(Boolean);
+        const last10 = lines.slice(-10);
+        if (last10.length === 0) return 'No hay registros de auditoría.';
+        return ` *Auditoría de economía (últimas 10):*\n\n${last10.join('\n')}`;
+      } catch (e) {
+        return 'No se pudo leer el log de auditoría.';
+      }
+    },
+  },
 };
 
 const commandAliases = { bj: 'blackjack', planto: 'plantarme', plantas: 'plantarme', balance: 'bal', dep: 'deposit', wd: 'withdraw', w: 'work', robar: 'rob', regalo: 'daily', rt: 'ruleta' };
@@ -1775,9 +2508,21 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'give', 'take'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
+
+  if (OWNER_ONLY.includes(resolvedCommand) && !isOwner(ctx)) {
+    console.log('[cmd] BLOQUEADO (solo dueño)', resolvedCommand, 'from', getSenderId(ctx));
+    await reply(ctx, '🔒 Solo el creador del bot puede usar este comando.');
+    return;
+  }
+
+  if (isRestricted(resolvedCommand) && !hasPermission(ctx)) {
+    console.log('[cmd] BLOQUEADO (restringido)', resolvedCommand, 'from', getSenderId(ctx));
+    await reply(ctx, '🔒 Este comando es solo para usuarios autorizados.');
+    return;
+  }
 
   if (!publicCommands.includes(resolvedCommand) && !hasPermission(ctx)) {
     if (!(adminGroupCommands.includes(resolvedCommand) && (await isGroupAdmin(ctx)))) {
@@ -2248,8 +2993,18 @@ setInterval(() => {
   }
 }, 30 * 1000);
 
+const shutdown = () => {
+  flushEcon();
+};
+
+process.on('exit', shutdown);
+process.on('SIGINT', () => { shutdown(); process.exit(0); });
+process.on('SIGTERM', () => { shutdown(); process.exit(0); });
+process.on('SIGHUP', () => { shutdown(); process.exit(0); });
+
 process.on('uncaughtException', (err) => {
   console.error('✗ uncaughtException:', (err && err.stack) || err);
+  shutdown();
   process.exit(1);
 });
 
@@ -2259,5 +3014,6 @@ process.on('unhandledRejection', (reason) => {
 
 startBot().catch((e) => {
   console.error('Error iniciando el bot:', e);
+  shutdown();
   process.exit(1);
 });
