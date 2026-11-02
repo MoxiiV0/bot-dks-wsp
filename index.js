@@ -7,6 +7,7 @@ const {
   getContentType,
 } = require('baileys');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const pino = require('pino');
 const fs = require('fs');
 const config = require('./config');
@@ -75,11 +76,12 @@ loadEcon();
 if (!econ.names) econ.names = {};
 
 const econUser = (id) => {
-  if (!econ.users[id]) econ.users[id] = { cash: 0, bank: 0, cd: {} };
+  if (!econ.users[id]) econ.users[id] = { cash: 0, bank: 0, cd: {}, dailyStreak: 0 };
   const u = econ.users[id];
   if (!u.cd) u.cd = {};
   if (typeof u.cash !== 'number') u.cash = 0;
   if (typeof u.bank !== 'number') u.bank = 0;
+  if (typeof u.dailyStreak !== 'number') u.dailyStreak = 0;
   return u;
 };
 
@@ -378,14 +380,32 @@ const endBlackjack = (me) => {
   const pV = handValue(game.player);
   while (handValue(game.dealer) < 17) game.dealer.push(game.deck.pop());
   const dV = handValue(game.dealer);
+  const u = econUser(me);
+  const bet = game.bet || 0;
   delete globalThis._bj[me];
 
-  const head = ` *Tú:* ${formatHand(game.player)} = *${pV}*\n\n *Banca:* ${formatHand(game.dealer)} = *${dV}*`;
+  const head = ` *Tú:* ${formatHand(game.player)} = *${pV}*\n\n *Banca:* ${formatHand(game.dealer)} = *${dV}*\n *Apuesta:* *${money(bet)}*`;
 
-  if (dV > 21) return `${head}\n\n ¡La banca se pasó! 🎉 *Ganaste.*`;
-  if (pV > dV) return `${head}\n\n 🎉 *Ganaste.*`;
-  if (pV === dV) return `${head}\n\n 🤝 *Empate.*`;
-  return `${head}\n\n 😞 *Perdiste.*`;
+  let outcome = '';
+  if (dV > 21) {
+    u.cash += bet * 2;
+    saveEcon();
+    outcome = `\n\n ¡La banca se pasó! 🎉 *Ganaste ${money(bet * 2)}.*`;
+  } else if (pV > dV) {
+    u.cash += bet * 2;
+    saveEcon();
+    outcome = `\n\n 🎉 *Ganaste ${money(bet * 2)}.*`;
+  } else if (pV === dV) {
+    u.cash += bet;
+    saveEcon();
+    outcome = `\n\n 🤝 *Empate.* Te devuelven tu apuesta ${money(bet)}.`;
+  } else {
+    u.cash = Math.max(0, u.cash - bet);
+    saveEcon();
+    outcome = `\n\n 😞 *Perdiste ${money(bet)}.*`;
+  }
+
+  return `${head}${outcome}`;
 };
 
 const getChatSettings = (chatId) => {
@@ -399,6 +419,7 @@ const getChatSettings = (chatId) => {
     goodbyeText: ov.goodbyeText !== undefined ? ov.goodbyeText : settings.goodbyeText,
     lobby: ov.lobby !== undefined ? ov.lobby : false,
     lobbyForm: ov.lobbyForm !== undefined ? ov.lobbyForm : settings.lobbyForm,
+    helpTypes: ov.helpTypes,
   };
 };
 
@@ -428,57 +449,105 @@ const formatTemplate = (template, vars) => {
     .replace(/{members}/g, vars.members);
 };
 
+const helpCategories = {
+  casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'ruleta', 'rt', 'medida', 'match', '8ball'],
+  group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
+  admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
+  utility: ['help', 'info', 'ping', 'stk'],
+};
+
+const helpCategoryLabels = {
+  casino: '🎰 Casino, Economía y Juegos',
+  group: '👥 Grupo',
+  admin: '🛠️ Administración',
+  utility: '⚙️ Utilidad',
+};
+
+const helpAllCats = Object.keys(helpCategories);
+
 const commands = {
   help: {
-    desc: ' Lista todos los comandos disponibles',
-    execute: async () => {
+    desc: ' Muestra comandos filtrados por categoría de este chat',
+    execute: async (ctx) => {
       const prefix = config.prefix;
+      const chatSt = getChatSettings(ctx.jid);
+      let allowedCats = chatSt.helpTypes;
+      if (!allowedCats || allowedCats.length === 0) allowedCats = helpAllCats;
+
       let helpText = ` 「  ${config.botName}  」\n\n`;
-      helpText += `  Comandos disponibles:\n\n`;
-      helpText += `  ${prefix}help - Muestra esta lista\n`;
-      helpText += `  ${prefix}info - Información del bot\n`;
-      helpText += `  ${prefix}tagall - Menciona a todos (listado)\n`;
-      helpText += `  ${prefix}tag - Menciona a todos en silencio (admins)\n`;
-      helpText += `  ${prefix}tagadmin - Menciona a los admins\n`;
-      helpText += `  ${prefix}stk - Convertir imagen a sticker\n`;
-      helpText += `  ${prefix}antilink on/off - Activar/desactivar anti-links\n`;
-      helpText += `  ${prefix}welcome on/off - Activar/desactivar bienvenida\n`;
-      helpText += `  ${prefix}setwelcome <texto> - Cambiar texto de bienvenida\n`;
-      helpText += `  ${prefix}setgoodbye <texto> - Cambiar texto de despedida\n`;
-      helpText += `  ${prefix}testwelcome - Ver vista previa de la bienvenida\n`;
-      helpText += `  ${prefix}texts - Ver textos configurados\n`;
-      helpText += `  ${prefix}lobby on/off - Modo lobby: formulario a cada recién llegado\n`;
-      helpText += `  ${prefix}setform <texto> - Formulario del lobby de este grupo\n`;
-      helpText += `  ${prefix}testlobby - Simula el flujo del lobby\n`;
-      helpText += `  ${prefix}seguir @usuario - Avanza lobby atascado (admins)\n`;
-      helpText += `  ${prefix}seguir reset @usuario - Reinicia lobby (admins)\n`;
-      helpText += `  ${prefix}bienvenido @usuario - Aprobar entrada y mandar link (admins)\n`;
-      helpText += `  ${prefix}expulsar @usuario - Expulsar del lobby (admins)\n`;
-      helpText += `  ${prefix}perm - Gestionar permisos (solo owner)\n`;
-      helpText += `  ${prefix}promote - Dar permiso (solo owner, respondé o poné número)\n`;
-      helpText += `  ${prefix}demote - Quitar permiso (solo owner, respondé o poné número)\n`;
-      helpText += `  ${prefix}setup - Habilitar este chat para el bot (solo owner)\n`;
-      helpText += `  ${prefix}unlock - Deshabilitar este chat (solo owner)\n`;
-      helpText += `  ${prefix}lock - Listar chats habilitados (solo owner)\n`;
-      helpText += `  ${prefix}ping - Verificar si el bot funciona\n`;
-      helpText += `  ${prefix}medida - Cuánto te mide (diversión)\n`;
-      helpText += `  ${prefix}match @usuario - Compatibilidad entre 2 personas\n`;
-      helpText += `  ${prefix}8ball <pregunta> - La bola mágica responde\n`;
-      helpText += `  ${prefix}ruleta <opción A> o <opción B> - La ruleta elige por vos\n`;
-      helpText += `  ${prefix}blackjack - Jugar Blackjack (21), luego #pedir / #plantarme\n`;
-      helpText += `  ${prefix}work - Trabajar y ganar plata (tiene espera)\n`;
-      helpText += `  ${prefix}slut - Plata rápida con riesgo (tiene espera)\n`;
-      helpText += `  ${prefix}crime - Delito: plata o multa (tiene espera)\n`;
-      helpText += `  ${prefix}daily - Reclamar regalo diario (24h)\n`;
-      helpText += `  ${prefix}rob @usuario - Intentar robarle a alguien (tiene espera)\n`;
-      helpText += `  ${prefix}pay @usuario <monto> - Transferir dinero a otro\n`;
-      helpText += `  ${prefix}bal [@usuario] - Ver saldo (el tuyo o de otro)\n`;
-      helpText += `  ${prefix}baltop - Top 10 de usuarios más ricos\n`;
-      helpText += `  ${prefix}deposit <monto|all> - Depositar efectivo en el banco\n`;
-      helpText += `  ${prefix}withdraw <monto|all> - Retirar del banco\n`;
-      helpText += `  ${prefix}give @usuario <monto> - Dar dinero (solo owner)\n`;
-      helpText += `  ${prefix}take @usuario <monto> - Quitar dinero (solo owner)\n`;
+      helpText += `  Comandos disponibles en este chat:\n\n`;
+
+      for (const cat of allowedCats) {
+        if (!helpCategories[cat]) continue;
+        helpText += `  *${helpCategoryLabels[cat] || cat}*\n`;
+        for (const cmd of helpCategories[cat]) {
+          const c = commands[cmd];
+          if (!c) continue;
+          const alias = Object.entries(commandAliases).find(([, v]) => v === cmd);
+          const aliasTxt = alias ? ` (alias: #${alias[0]})` : '';
+          helpText += `    ${prefix}${cmd}${aliasTxt} - ${c.desc.trim()}\n`;
+        }
+        helpText += `\n`;
+      }
+
+      helpText += `  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+      helpText += `  Para cambiar categorías usá:\n`;
+      helpText += `  ${prefix}sethelp <categorías>\n`;
+      helpText += `  Categorías: ${helpAllCats.join(', ')}\n`;
+      helpText += `  Ej: ${prefix}sethelp casino,economy`;
+
       return helpText;
+    },
+  },
+
+  sethelp: {
+    desc: ' Configura qué categorías de comandos se muestran en #help (solo admins/owner)',
+    execute: async (ctx) => {
+      if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins pueden configurar el help de este grupo.';
+
+      const chatId = ctx.jid;
+      settings.chats = settings.chats || {};
+      settings.chats[chatId] = settings.chats[chatId] || {};
+      const currentCats = settings.chats[chatId].helpTypes || helpAllCats;
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const arg = args[0] ? args[0].toLowerCase() : '';
+
+      if (!arg) {
+        return `📋 *Categorías actuales de #help en este grupo:*\n\n${currentCats.join(', ')}\n\nUsá:\n#sethelp <cat1,cat2,...>  (establecer)\n#sethelp +categoría  (agregar)\n#sethelp -categoría  (quitar)\n#sethelp reset  (volver a todas)\nCategorías: ${helpAllCats.join(', ')}`;
+      }
+
+      if (arg === 'reset') {
+        settings.chats[chatId].helpTypes = helpAllCats;
+        saveSettings();
+        return `✅ Se restauraron todas las categorías de #help en este grupo.`;
+      }
+
+      let newCats;
+      if (arg.startsWith('+')) {
+        const cat = arg.slice(1);
+        if (!helpAllCats.includes(cat)) return `Categoría inválida: ${cat}. Opciones: ${helpAllCats.join(', ')}`;
+        if (currentCats.includes(cat)) return `La categoría ${cat} ya está activa.`;
+        newCats = [...currentCats, cat];
+      } else if (arg.startsWith('-')) {
+        const cat = arg.slice(1);
+        if (!helpAllCats.includes(cat)) return `Categoría inválida: ${cat}. Opciones: ${helpAllCats.join(', ')}`;
+        if (!currentCats.includes(cat)) return `La categoría ${cat} no está activa.`;
+        newCats = currentCats.filter((c) => c !== cat);
+        if (newCats.length === 0) return `No podés quitar todas las categorías. Dejá al menos una.`;
+      } else {
+        const cats = arg.split(',').map((c) => c.trim()).filter(Boolean);
+        for (const c of cats) {
+          if (!helpAllCats.includes(c)) return `Categoría inválida: ${c}. Opciones: ${helpAllCats.join(', ')}`;
+        }
+        newCats = cats;
+      }
+
+      settings.chats[chatId].helpTypes = newCats;
+      saveSettings();
+      return `✅ Categorías de #help actualizadas en este grupo:\n\n${newCats.join(', ')}`;
     },
   },
 
@@ -992,47 +1061,254 @@ const commands = {
   },
 
   ruleta: {
-    desc: ' Gira la ruleta y elige entre 2 o más opciones (Ej: #ruleta pizza o hamburguesa)',
+    desc: ' Ruleta de casino. Apostá con #ruleta <rojo|negro> <monto> (mínimo 1000). Se abre ronda automáticamente',
     execute: async (ctx) => {
       if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
-      const raw = ctx.text.slice(config.prefix.length + 6).trim();
-      if (!raw) {
-        return `Uso: ${config.prefix}ruleta <opción A> o <opción B>\n   Ej: ${config.prefix}ruleta pizza o hamburguesa`;
+      if (!globalThis._ruletaGame) {
+        globalThis._ruletaGame = {
+          active: false,
+          jid: null,
+          endTime: 0,
+          interval: null,
+          bets: new Map(),
+          starter: null,
+        };
       }
-      const options = raw
-        .split(/\s+(?:o|vs|y)\s+|\s*[,|]\s*/i)
-        .map((o) => o.trim())
-        .filter((o) => o.length > 0);
-      if (options.length < 2) {
-        return `Necesito al menos 2 opciones separadas por " o ".\n   Ej: ${config.prefix}ruleta ver película o jugar`;
-      }
-      if (!globalThis._ruletas) globalThis._ruletas = {};
-      const key = ctx.jid;
-      if (globalThis._ruletas[key]) return 'Ya hay una ruleta girando en este grupo. Esperá a que termine.';
-      globalThis._ruletas[key] = true;
+      const g = globalThis._ruletaGame;
+      const me = getSenderId(ctx);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
 
-      const optsList = options.map((o, i) => `${['🔵', '🟡', '🔴', '🟢', '🟣'][i % 5]} *${o}*`).join('\n');
-      const seconds = 6;
-      await sendTo(
-        ctx.jid,
-        `\u200E🎡 *Ruleta girando...*\n\n${optsList}\n\nEl resultado llega en ${seconds} segundos... 🌀`
-      );
-      setTimeout(async () => {
-        const winner = options[Math.floor(Math.random() * options.length)];
-        try {
-          await sendTo(ctx.jid, `\u200E🎯 La ruleta eligió: *${winner}* 🎉`);
-        } catch (e) {
-          console.error('Error enviando resultado ruleta:', e.message);
-        } finally {
-          delete globalThis._ruletas[key];
-        }
-      }, seconds * 1000);
-      return null;
+      // Si no pone nada, iniciar ronda automáticamente
+      if (!sub) {
+        if (g.active) return `Ya hay una ruleta abierta en este grupo. Apostá con: #ruleta <rojo|negro> <monto>`;
+        g.active = true;
+        g.jid = ctx.jid;
+        g.starter = me;
+        g.bets = new Map();
+        g.endTime = Date.now() + 30 * 1000;
+
+        await sendTo(
+          ctx.jid,
+          `\u200E🎡 *Ruleta DKS - Ronda abierta!*\n\nApostá con:\n#ruleta rojo <monto>\n#ruleta negro <monto>\n#ruleta red <monto>\n#ruleta black <monto>\nMínimo: *1000 Coins*\n\nTiempo para apostar: *30 segundos*\n¡Buena suerte! 🍀`
+        );
+
+        // Avisos cada 7 segundos
+        const announce = (left) => {
+          if (!g.active) return;
+          if (left <= 0) return;
+          sendTo(ctx.jid, `\u200E⏳ Quedan *${Math.ceil(left / 1000)}s* para apostar en la ruleta.`).catch(() => {});
+        };
+        announce(28000);
+        announce(21000);
+        announce(14000);
+        announce(7000);
+
+        g.interval = setTimeout(async () => {
+          if (!g.active) return;
+          g.active = false;
+          clearTimeout(g.interval);
+          g.interval = null;
+
+          // Girar ruleta: solo rojo o negro
+          const winningNum = Math.floor(Math.random() * 36) + 1; // 1-36
+          const redNums = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+          const blackNums = [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35];
+          let winningColor = 'rojo';
+          if (redNums.includes(winningNum)) winningColor = 'rojo';
+          if (blackNums.includes(winningNum)) winningColor = 'negro';
+
+          const lines = [];
+          let totalPayout = 0;
+          let totalBets = 0;
+
+          for (const [userId, bet] of g.bets) {
+            const u = econUser(userId);
+            totalBets += bet.amount;
+            let won = false;
+            let multiplier = 0;
+            if (bet.type === 'color') {
+              if (bet.choice === winningColor) {
+                won = true;
+                multiplier = 2;
+              }
+            }
+            if (won) {
+              const payout = bet.amount * multiplier;
+              u.cash += payout;
+              totalPayout += payout;
+              lines.push(`✅ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y ganó *${money(payout)}* (x${multiplier})`);
+            } else {
+              u.cash = Math.max(0, u.cash - bet.amount);
+              lines.push(`❌ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y perdió.`);
+            }
+          }
+          saveEcon();
+
+          const colorEmoji = winningColor === 'rojo' ? '🔴' : '⚫';
+          let resultMsg = `\u200E🎯 *Ruleta cerrada*\n\nNúmero ganador: ${colorEmoji} *${winningNum}* (${winningColor})\n\n`;
+          if (g.bets.size === 0) {
+            resultMsg += `Nadie apostó esta ronda.`;
+          } else {
+            resultMsg += `${lines.join('\n')}\n\nTotal apostado: *${money(totalBets)}*\nTotal pagado: *${money(totalPayout)}*`;
+          }
+          try {
+            await sendTo(ctx.jid, resultMsg);
+          } catch (e) {
+            console.error('Error enviando resultado ruleta:', e.message);
+          } finally {
+            g.active = false;
+            g.jid = null;
+            g.starter = null;
+            g.bets = new Map();
+            g.interval = null;
+          }
+        }, 30000);
+
+        return null;
+      }
+
+      // Detener ronda anticipadamente (solo starter o admin)
+      if (sub === 'stop') {
+        if (!g.active) return 'No hay ninguna ruleta activa en este grupo.';
+        if (me !== g.starter && !(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo quien inició la ronda o un admin puede detenerla.';
+        clearTimeout(g.interval);
+        g.active = false;
+        g.interval = null;
+        await sendTo(ctx.jid, '\u200E🛑 La ruleta fue detenida anticipadamente. Nadie ganó ni perdió.');
+        return null;
+      }
+
+      // Apostar solo rojo o negro (acepta red/black como sinónimos)
+      // Soporta ambos formatos: #ruleta rojo 1000  y  #ruleta 1000 rojo
+      let choice = sub;
+      let amountArg = args[1];
+      if (choice === 'red') choice = 'rojo';
+      if (choice === 'black') choice = 'negro';
+
+      // Si el primer arg es un número, entonces el color está en la segunda posición
+      if (/^\d+$/.test(choice)) {
+        amountArg = choice;
+        choice = args[1];
+        if (choice === 'red') choice = 'rojo';
+        if (choice === 'black') choice = 'negro';
+      }
+
+      if (!choice || !amountArg) {
+        return `Uso: #ruleta <rojo|negro> <monto>\n   Ej: #ruleta rojo 1000\n   Ej: #ruleta 1000 rojo\n   Ej: #ruleta red 1000\n   Ej: #ruleta 1000 red\n   Mínimo: *1000 Coins*`;
+      }
+      if (choice !== 'rojo' && choice !== 'negro') return 'Opción inválida. Usá: rojo o negro (también red/black).';
+
+      let amount;
+      if (amountArg === 'all' || amountArg === 'todo') {
+        const u = econUser(me);
+        amount = u.cash;
+      } else if (/^\d+$/.test(amountArg)) {
+        amount = parseInt(amountArg, 10);
+      } else {
+        return 'Monto inválido.';
+      }
+      if (!amount || amount < 1000) return 'La apuesta mínima es de *1000 Coins*.';
+      const u = econUser(me);
+      if (amount > u.cash) return 'No tienes suficiente dinero para esa apuesta.';
+
+      // Si no hay ronda activa, iniciarla automáticamente al apostar
+      if (!g.active || g.jid !== ctx.jid) {
+        g.active = true;
+        g.jid = ctx.jid;
+        g.starter = me;
+        g.bets = new Map();
+        g.endTime = Date.now() + 30 * 1000;
+
+        await sendTo(
+          ctx.jid,
+          `\u200E🎡 *Ruleta DKS - Ronda abierta!*\n\nApostá con:\n#ruleta rojo <monto>\n#ruleta negro <monto>\n#ruleta red <monto>\n#ruleta black <monto>\nMínimo: *1000 Coins*\n\nTiempo para apostar: *30 segundos*\n¡Buena suerte! 🍀`
+        );
+
+        // Avisos cada 7 segundos
+        const announce = (left) => {
+          if (!g.active) return;
+          if (left <= 0) return;
+          sendTo(ctx.jid, `\u200E⏳ Quedan *${Math.ceil(left / 1000)}s* para apostar en la ruleta.`).catch(() => {});
+        };
+        announce(28000);
+        announce(21000);
+        announce(14000);
+        announce(7000);
+
+        g.interval = setTimeout(async () => {
+          if (!g.active) return;
+          g.active = false;
+          clearTimeout(g.interval);
+          g.interval = null;
+
+          // Girar ruleta: solo rojo o negro
+          const winningNum = Math.floor(Math.random() * 36) + 1; // 1-36
+          const redNums = [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36];
+          const blackNums = [2,4,6,8,10,11,13,15,17,20,22,24,26,28,29,31,33,35];
+          let winningColor = 'rojo';
+          if (redNums.includes(winningNum)) winningColor = 'rojo';
+          if (blackNums.includes(winningNum)) winningColor = 'negro';
+
+          const lines = [];
+          let totalPayout = 0;
+          let totalBets = 0;
+
+          for (const [userId, bet] of g.bets) {
+            const u = econUser(userId);
+            totalBets += bet.amount;
+            let won = false;
+            let multiplier = 0;
+            if (bet.type === 'color') {
+              if (bet.choice === winningColor) {
+                won = true;
+                multiplier = 2;
+              }
+            }
+            if (won) {
+              const payout = bet.amount * multiplier;
+              u.cash += payout;
+              totalPayout += payout;
+              lines.push(`✅ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y ganó *${money(payout)}* (x${multiplier})`);
+            } else {
+              u.cash = Math.max(0, u.cash - bet.amount);
+              lines.push(`❌ *${displayName(userId)}* apostó ${money(bet.amount)} a *${bet.choice}* y perdió.`);
+            }
+          }
+          saveEcon();
+
+          const colorEmoji = winningColor === 'rojo' ? '🔴' : '⚫';
+          let resultMsg = `\u200E🎯 *Ruleta cerrada*\n\nNúmero ganador: ${colorEmoji} *${winningNum}* (${winningColor})\n\n`;
+          if (g.bets.size === 0) {
+            resultMsg += `Nadie apostó esta ronda.`;
+          } else {
+            resultMsg += `${lines.join('\n')}\n\nTotal apostado: *${money(totalBets)}*\nTotal pagado: *${money(totalPayout)}*`;
+          }
+          try {
+            await sendTo(ctx.jid, resultMsg);
+          } catch (e) {
+            console.error('Error enviando resultado ruleta:', e.message);
+          } finally {
+            g.active = false;
+            g.jid = null;
+            g.starter = null;
+            g.bets = new Map();
+            g.interval = null;
+          }
+        }, 30000);
+      }
+
+      u.cash = Math.max(0, u.cash - amount);
+      saveEcon();
+      g.bets.set(me, { type: 'color', choice, amount });
+
+      const emoji = choice === 'rojo' ? '🔴' : '⚫';
+      return `${emoji} *${displayName(me)}* apostó *${money(amount)}* a *${choice}*. ¡Buena suerte! 🍀`;
     },
   },
 
   blackjack: {
-    desc: ' Inicia una partida de Blackjack (21)',
+    desc: ' Jugar Blackjack (21). Uso: #bj <apuesta> (mínimo 1000 Coins)',
     execute: async (ctx) => {
       if (!globalThis._bj) globalThis._bj = {};
       const me = getSenderId(ctx);
@@ -1040,23 +1316,34 @@ const commands = {
         return 'Ya tenés una partida en curso. Usá #pedir (otra carta) o #plantarme (cerrar).';
       }
 
+      const u = econUser(me);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const betArg = args[0];
+      let bet;
+      if (!betArg) return 'Uso: #bj <apuesta> (mínimo 1000 Coins). Ej: #bj 1000';
+      if (betArg === 'all' || betArg === 'todo') bet = u.cash;
+      else if (/^\d+$/.test(betArg)) bet = parseInt(betArg, 10);
+      else return 'Uso: #bj <apuesta> (mínimo 1000 Coins). Ej: #bj 1000';
+      if (!bet || bet < 1000) return 'La apuesta mínima es de *1000 Coins*.';
+      if (bet > u.cash) return 'No tienes suficiente dinero para esa apuesta.';
+
       const deck = buildDeck();
       const player = [deck.pop(), deck.pop()];
       const dealer = [deck.pop(), deck.pop()];
-      globalThis._bj[me] = { deck, player, dealer };
+      globalThis._bj[me] = { deck, player, dealer, bet };
 
       const pV = handValue(player);
       if (pV === 21) {
         const msgTxt = endBlackjack(me);
-        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(player)} = *21*\n\n¡BLACKJACK! 🎉 ${msgTxt}`;
+        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(player)} = *21*\n *Apuesta:* *${money(bet)}*\n\n¡BLACKJACK! 🎉 ${msgTxt}`;
       }
 
-      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(player)} = *${pV}*\n\n *Banca:* ${formatHand([dealer[0]])} 🂠 = *${handValue([dealer[0]])}*\n\n ¿*#pedir* otra carta o te *#plantas*?`;
+      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(player)} = *${pV}*\n *Apuesta:* *${money(bet)}*\n\n *Banca:* ${formatHand([dealer[0]])} 🂠 = *${handValue([dealer[0]])}*\n\n ¿*#pedir* otra carta o te *#plantas*?`;
     },
   },
 
   pedir: {
-    desc: ' Pedí más carta en el Blackjack',
+    desc: ' Pedir otra carta en el Blackjack',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const game = globalThis._bj && globalThis._bj[me];
@@ -1064,19 +1351,22 @@ const commands = {
       game.player.push(game.deck.pop());
       const v = handValue(game.player);
       if (v > 21) {
+        const u = econUser(me);
+        u.cash = Math.max(0, u.cash - game.bet);
+        saveEcon();
         delete globalThis._bj[me];
-        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n\n Te pasaste de 21... 💥 *Perdiste.*`;
+        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n *Apuesta:* *${money(game.bet)}*\n\n Te pasaste de 21... 💥 *Perdiste ${money(game.bet)}.*`;
       }
       if (v === 21) {
         const res = endBlackjack(me);
-        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(game.player)} = *21*\n\n ¡21! 🎉\n\n${res}`;
+        return ` 🃏 *Blackjack*\n\n *Tú:* ${formatHand(game.player)} = *21*\n *Apuesta:* *${money(game.bet)}*\n\n ¡21! 🎉\n\n${res}`;
       }
-      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n\n *Banca:* ${formatHand([game.dealer[0]])} 🂠 = *${handValue([game.dealer[0]])}*\n\n ¿Seguís con #pedir o te #plantas?`;
+      return ` 🃏 *Blackjack DKS*\n\n *Tú:* ${formatHand(game.player)} = *${v}*\n *Apuesta:* *${money(game.bet)}*\n\n *Banca:* ${formatHand([game.dealer[0]])} 🂠 = *${handValue([game.dealer[0]])}*\n\n ¿Seguís con #pedir o te #plantas?`;
     },
   },
 
   plantarme: {
-    desc: ' Te plantas en el Blackjack y juega la banca',
+    desc: ' Plantarse en el Blackjack y juega la banca',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const game = globalThis._bj && globalThis._bj[me];
@@ -1098,7 +1388,7 @@ const commands = {
         saveEcon();
         return `✿ ¡1 EN UN MILLÓN! Mora te donó *${money(100000)}*. ¡IMPOSIBLE!`;
       }
-      const ganancia = rand(200, 900);
+      const ganancia = rand(1000, 1500);
       u.cash += ganancia;
       cdSet(u, 'work');
       saveEcon();
@@ -1114,12 +1404,12 @@ const commands = {
       if (left > 0) return fmtCooldownMsg(left, 'slut');
       cdSet(u, 'slut');
       if (Math.random() < 0.35) {
-        const perdida = Math.min(u.cash, rand(100, 500));
-        u.cash -= perdida;
+        const perdida = Math.min(u.cash, rand(100, 3000));
+        u.cash = Math.max(0, u.cash - perdida);
         saveEcon();
         return `✿ ${pick(SLUT_FAIL)} *${money(perdida)}*.`;
       }
-      const ganancia = rand(300, 1200);
+      const ganancia = rand(300, 3000);
       u.cash += ganancia;
       saveEcon();
       return `✿ ${pick(SLUT_WIN)} *${money(ganancia)}*.`;
@@ -1134,12 +1424,12 @@ const commands = {
       if (left > 0) return fmtCooldownMsg(left, 'crime');
       cdSet(u, 'crime');
       if (Math.random() < 0.4) {
-        const multa = Math.min(u.cash, rand(200, 800));
-        u.cash -= multa;
+        const multa = Math.min(u.cash, rand(300, 5000));
+        u.cash = Math.max(0, u.cash - multa);
         saveEcon();
         return `✿ ${pick(CRIME_FAIL)} *${money(multa)}*.`;
       }
-      const ganancia = rand(500, 2500);
+      const ganancia = rand(1000, 5000);
       u.cash += ganancia;
       saveEcon();
       return `✿ ${pick(CRIME_WIN)} *${money(ganancia)}*.`;
@@ -1147,16 +1437,50 @@ const commands = {
   },
 
   daily: {
-    desc: ' Reclamá tu regalo diario (24 horas)',
+    desc: ' Reclamá tu regalo diario (24h). Base 30k + racha acumulada',
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       const left = cdLeft(u, 'daily', 24 * 60 * 60 * 1000);
       if (left > 0) return fmtCooldownMsg(left, 'daily');
-      const ganancia = pick([1000, 1200, 1500, 1800, 2000, 2300, 2600, 3000]);
+
+      // Calcular racha: si ya reclamó ayer, subir racha; si no, resetear a 1
+      const now = Date.now();
+      const lastDaily = u.cd.daily || 0;
+      const diffHours = (now - lastDaily) / (1000 * 60 * 60);
+      if (lastDaily && diffHours > 24 && diffHours <= 48) {
+        u.dailyStreak += 1;
+      } else if (!lastDaily || diffHours > 48) {
+        u.dailyStreak = 1;
+      }
+
+      const base = 30000;
+      const streakBonus = (u.dailyStreak - 1) * 5000; // +5k por cada día extra de racha
+      const ganancia = base + streakBonus;
+
       u.cash += ganancia;
       cdSet(u, 'daily');
       saveEcon();
-      return `✿ ¡Reclamaste tu regalo diario! *${money(ganancia)}*.`;
+
+      return `✿ ¡Reclamaste tu regalo diario!\n💰 Base: *${money(base)}*\n🔥 Racha: *día ${u.dailyStreak}* (+${money(streakBonus)})\n━━━━━━━━━━━━━━━━━━━━━\n🎁 Total: *${money(ganancia)}*`;
+    },
+  },
+
+  resetdaily: {
+    desc: ' Reinicia el daily de usuarios con menos de 30k (solo owner)',
+    execute: async (ctx) => {
+      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      let reseteados = 0;
+      for (const [id, u] of Object.entries(econ.users)) {
+        if (typeof u.cash !== 'number') u.cash = 0;
+        if (u.cash < 30000) {
+          u.cd = u.cd || {};
+          u.cd.daily = 0;
+          u.dailyStreak = 0;
+          reseteados++;
+        }
+      }
+      saveEcon();
+      return `✅ Daily reiniciado para *${reseteados}* usuario(s) con menos de ${money(30000)}.`;
     },
   },
 
@@ -1181,7 +1505,7 @@ const commands = {
         return `✿ Robaste *${money(steal)}* a *${displayName(target)}*.`;
       }
       const fine = Math.min(u.cash, rand(100, 600));
-      u.cash -= fine;
+      u.cash = Math.max(0, u.cash - fine);
       saveEcon();
       return `✿ ¡Te atraparon! Perdiste *${money(fine)}*.`;
     },
@@ -1203,7 +1527,7 @@ const commands = {
       else return 'Uso: #pay @usuario <monto|all>';
       if (!amount || amount <= 0) return 'Monto inválido.';
       if (amount > u.cash) return 'No tienes suficiente dinero para transferir.';
-      u.cash -= amount;
+      u.cash = Math.max(0, u.cash - amount);
       econUser(target).cash += amount;
       saveEcon();
       return `✿ Transferiste *${money(amount)}* a *${displayName(target)}*.`;
@@ -1281,9 +1605,8 @@ const commands = {
   },
 
   give: {
-    desc: ' Regalá dinero a alguien (solo owner)',
+    desc: ' Regalá dinero a alguien. Uso: #give @usuario <monto>',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
       const target = getTargetUser(ctx);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const amountArg = args.length ? args[args.length - 1] : '';
@@ -1298,9 +1621,8 @@ const commands = {
   },
 
   take: {
-    desc: ' Quitá dinero a alguien (solo owner)',
+    desc: ' Quitá dinero a alguien. Uso: #take @usuario <monto>',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
       const target = getTargetUser(ctx);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const amountArg = args.length ? args[args.length - 1] : '';
@@ -1310,16 +1632,16 @@ const commands = {
       const amount = parseInt(amountArg, 10);
       const t = econUser(target);
       const taken = Math.min(amount, t.cash);
-      t.cash -= taken;
+      t.cash = Math.max(0, t.cash - taken);
       saveEcon();
       return `✿ Le quitaste *${money(taken)}* a *${displayName(target)}*.`;
     },
   },
 
   perm: {
-    desc: ' Gestiona permisos de uso (solo owner)',
+    desc: ' Gestiona permisos de uso (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       const parts = ctx.text.slice(config.prefix.length + 4).trim().split(/\s+/);
       const action = parts[0] ? parts[0].toLowerCase() : '';
       const num = parts[1] ? parts[1].replace(/\D/g, '') : null;
@@ -1355,9 +1677,9 @@ const commands = {
   },
 
   promote: {
-    desc: ' Da permiso de uso a alguien (solo owner)',
+    desc: ' Da permiso de uso a alguien (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       const argNum = ctx.text.slice(config.prefix.length + 7).trim().replace(/\D/g, '');
       const num = argNum || getTargetFromReply(ctx);
       if (!num) {
@@ -1372,9 +1694,9 @@ const commands = {
   },
 
   demote: {
-    desc: ' Quita permiso de uso a alguien (solo owner)',
+    desc: ' Quita permiso de uso a alguien (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       const argNum = ctx.text.slice(config.prefix.length + 6).trim().replace(/\D/g, '');
       const num = argNum || getTargetFromReply(ctx);
       if (!num) {
@@ -1390,9 +1712,9 @@ const commands = {
   },
 
   setup: {
-    desc: ' Habilita el chat actual para el bot (solo owner)',
+    desc: ' Habilita el chat actual para el bot (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       if (!ctx.jid) return 'No se pudo identificar este chat.';
       settings.allowedChats = settings.allowedChats || [];
       if (settings.allowedChats.includes(ctx.jid)) {
@@ -1405,9 +1727,9 @@ const commands = {
   },
 
   unlock: {
-    desc: ' Deshabilita el chat actual para el bot (solo owner)',
+    desc: ' Deshabilita el chat actual para el bot (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       settings.allowedChats = settings.allowedChats || [];
       const idx = settings.allowedChats.indexOf(ctx.jid);
       if (idx === -1) return `⚠️ Este chat no estaba habilitado.`;
@@ -1418,9 +1740,9 @@ const commands = {
   },
 
   lock: {
-    desc: ' Lista los chats habilitados (solo owner)',
+    desc: ' Lista los chats habilitados (solo admins del grupo)',
     execute: async (ctx) => {
-      if (!isOwner(ctx)) return 'Solo el propietario puede usar este comando.';
+      if (!(await isGroupAdmin(ctx)) && !isOwner(ctx)) return 'Solo los admins del grupo pueden usar este comando.';
       const ids = settings.allowedChats || [];
       if (ids.length === 0) {
         return '*Ninguno* todavía. Usá #setup en el chat que querés habilitar.';
@@ -1439,7 +1761,7 @@ const commands = {
   },
 };
 
-const commandAliases = { bj: 'blackjack', planto: 'plantarme', plantas: 'plantarme', balance: 'bal', dep: 'deposit', wd: 'withdraw', w: 'work', robar: 'rob', regalo: 'daily' };
+const commandAliases = { bj: 'blackjack', planto: 'plantarme', plantas: 'plantarme', balance: 'bal', dep: 'deposit', wd: 'withdraw', w: 'work', robar: 'rob', regalo: 'daily', rt: 'ruleta' };
 
 const processCommand = async (ctx) => {
   if (!ctx.text || !ctx.text.startsWith(config.prefix)) return;
@@ -1452,8 +1774,8 @@ const processCommand = async (ctx) => {
   console.log('[cmd]', resolvedCommand, 'from', getSenderId(ctx));
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
-  const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'give', 'take'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
@@ -1853,6 +2175,13 @@ const startBot = async () => {
     if (qr) {
       console.log('\n Escanea el QR con tu WhatsApp:\n');
       qrcode.generate(qr, { small: true });
+      try {
+        fs.writeFileSync('qr-data.txt', qr);
+        QRCode.toFile('qr.png', qr, { width: 300 });
+        console.log('QR guardado en qr.png y qr-data.txt');
+      } catch (e) {
+        console.error('No se pudo guardar el QR como imagen:', e.message);
+      }
     }
     if (connection === 'open') {
       _ready = true;
