@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -1982,6 +1982,148 @@ const commands = {
     },
   },
 
+  evolucionar: {
+    desc: ' Evoluciona tu clase a su forma superior. Uso: #evolucionar <clase>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const nuevaClave = args[0] ? args[0].toLowerCase() : '';
+
+      if (!nuevaClave) {
+        const evo = rpg.EVOLUCIONES_CLASE[u.rpg.clase];
+        if (!evo) return 'Tu clase no tiene evolución disponible.';
+        return `🔄 Evolución disponible:\nDe: ${rpg.classLabel(u.rpg.clase)}\nA: ${rpg.classLabel(evo.nombre)}\nNivel requerido: ${evo.requisito} (tu nivel: ${u.rpg.nivel})\nCosto: Gratis\nUsá: #evolucionar ${evo.nombre}`;
+      }
+
+      const resultado = rpg.evolucionarClase(u, nuevaClave);
+      if (resultado.error) return resultado.error;
+
+      markEconDirty();
+      return `${resultado.mensaje}\n${rpg.NUEVAS_CLASES[nuevaClave].desc}`;
+    },
+  },
+
+  habilidades: {
+    desc: ' Ver habilidades desbloqueables por tu nivel. Uso: #habilidades',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.clase) return 'No tienes una clase seleccionada. Usá #clase primero.';
+
+      const disponibles = rpg.obtenerHabilidadesNivel(u);
+      if (disponibles.length === 0) return 'No hay habilidades disponibles para tu nivel actual.';
+
+      let txt = `📚 *Habilidades disponibles (Nivel ${u.rpg.nivel}):*\n\n`;
+      for (const h of disponibles) {
+        txt += `• *${h.nombre}* (Nivel ${h.nivel}) - ${money(h.costo)}\n`;
+      }
+      txt += `\nUsá: #desbloquear <clave>\nEjemplo: #desbloquear golpe_fuerte`;
+      return txt;
+    },
+  },
+
+  desbloquear: {
+    desc: ' Desbloquea una habilidad por nivel. Uso: #desbloquear <clave>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const key = args[0] ? args[0].toLowerCase() : '';
+
+      if (!key) return 'Uso: #desbloquear <clave>';
+
+      const resultado = rpg.desbloquearHabilidadPorNivel(u, key);
+      if (resultado.error) return resultado.error;
+
+      markEconDirty();
+      return `✅ Habilidad desbloqueada: *${resultado.habilidad.nombre}*\n${resultado.habilidad.descripcion}\nNivel requerido: ${resultado.habilidad.nivel}`;
+    },
+  },
+
+  domar: {
+    desc: ' Domar una bestia para invocarla en combate. Uso: #domar <bestia>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.clase || u.rpg.clase !== 'invocador') {
+        return 'Solo los Invocadores pueden domar bestias. Usá #clase invocador.';
+      }
+
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const bestia = args[0] ? args[0].toLowerCase() : '';
+
+      if (!bestia) {
+        return `Bestias disponibles para domar:\n• lobo (nivel 5)\n• esqueleto (nivel 10)\n• jabali (nivel 15)\nUsá: #domar <bestia>`;
+      }
+
+      if (!u.rpg.bestiasDomadas) u.rpg.bestiasDomadas = [];
+      if (u.rpg.bestiasDomadas.includes(bestia)) return `Ya domaste a ${bestia}.`;
+
+      const nivelesReq = { lobo: 5, esqueleto: 10, jabali: 15 };
+      if (u.rpg.nivel < nivelesReq[bestia]) {
+        return `Necesitas nivel ${nivelesReq[bestia]} para domar a ${bestia}.`;
+      }
+
+      const costo = 1000;
+      if (u.cash < costo) return `No tienes suficiente dinero. Costo: ${money(costo)}.`;
+
+      u.cash = Math.max(0, u.cash - costo);
+      u.rpg.bestiasDomadas.push(bestia);
+      markEconDirty();
+
+      return `🐺 ¡Has domado a ${bestia}! Ahora puedes invocarla en combate con #invocar ${bestia}.`;
+    },
+  },
+
+  bestias: {
+    desc: ' Ver tus bestias domadas. Uso: #bestias',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.bestiasDomadas || u.rpg.bestiasDomadas.length === 0) {
+        return 'No tienes bestias domadas. Usá #domar <bestia> (solo Invocador).';
+      }
+
+      let txt = `🐾 *Tus Bestias Domadas*\n\n`;
+      for (const b of u.rpg.bestiasDomadas) {
+        txt += `• ${b}\n`;
+      }
+      txt += `\nUsá: #invocar <bestia> en combate.`;
+      return txt;
+    },
+  },
+
+  especial: {
+    desc: ' Ver tu habilidad especial por nivel (cada 10 niveles). Uso: #especial',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+
+      if (!u.rpg.nivel) return 'No tienes nivel de clase.';
+
+      const especial = rpg.obtenerHabilidadEspecial(u.rpg.nivel);
+      if (!especial) {
+        const proximo = Math.ceil(u.rpg.nivel / 10) * 10;
+        return `Tu próxima habilidad especial estará disponible en el nivel ${proximo}.`;
+      }
+
+      let txt = `⭐ *Habilidad Especial (Nivel ${u.rpg.nivel})*\n\n`;
+      txt += `• *${especial.nombre}*\n${especial.descripcion}\nCosto: ${money(especial.costo)}\n`;
+      txt += `\nUsá: #usar-especial ${especial.key}`;
+      return txt;
+    },
+  },
+
   clase: {
     desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro>',
     execute: async (ctx) => {
@@ -2937,7 +3079,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
