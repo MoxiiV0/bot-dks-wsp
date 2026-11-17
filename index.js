@@ -1544,9 +1544,11 @@ const commands = {
       }
       if (!globalThis._mazmorra) globalThis._mazmorra = new Map();
       const me = getSenderId(ctx);
-      if (globalThis._mazmorra.has(me)) {
+      const sesionPrevia = globalThis._mazmorra.get(me);
+      if (sesionPrevia && sesionPrevia.activo) {
         return 'Ya tenés una sesión de mazmorra activa. Usá #avanzar o #retirarse.';
       }
+      if (sesionPrevia) globalThis._mazmorra.delete(me); // limpiar sesión muerta
       const u = econUser(me);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const betArg = args[0];
@@ -1571,6 +1573,15 @@ const commands = {
       globalThis._mazmorra.set(me, session);
 
       const evento = generarEventoMazmorra(session);
+
+      // Si el evento de entrada terminó la sesión, limpiar para no bloquear
+      if (!session.activo) {
+        globalThis._mazmorra.delete(me);
+        markEconDirty();
+        return ` 🏰 *Mazmorra DKS - Piso 1*\n *Apuesta:* *${money(bet)}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó en el primer piso.* Volvé a intentar con #mazmorra.`;
+      }
+
+      markEconDirty();
       return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Apuesta:* *${money(bet)}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
     },
   },
@@ -1585,21 +1596,26 @@ const commands = {
 
       session.piso += 1;
       const u = econUser(me);
-      const evento = rpg.generarEventoMazmorra(u);
+      rpg.ensureRPG(u);
+      // Evento sobre la sesión (custodia): el botín vive en session.ganado
+      const evento = generarEventoMazmorra(session);
 
-      if (evento.tipo === 'perder_oro' && u.cash <= 0) {
-        session.activo = false;
-        session.ganado = 0;
-      }
+      // Contador del título Explorador: mayor piso alcanzado
+      if (session.piso - 1 > (u.rpg.statsPisos || 0)) u.rpg.statsPisos = session.piso - 1;
+      const nuevos = rpg.checkTitles(u);
 
       if (!session.activo) {
         globalThis._mazmorra.delete(me);
         markEconDirty();
-        return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó. Perdiste todo lo ganado.*`;
+        let txt = ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó. Perdiste todo lo ganado.*`;
+        if (nuevos.length) txt += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
+        return txt;
       }
 
       markEconDirty();
-      return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
+      let txt = ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Apuesta:* *${money(session.bet)}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
+      if (nuevos.length) txt += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
+      return txt;
     },
   },
 
@@ -1609,7 +1625,12 @@ const commands = {
       if (!globalThis._mazmorra) return 'No tenés sesión activa.';
       const me = getSenderId(ctx);
       const session = globalThis._mazmorra.get(me);
-      if (!session || !session.activo) return 'No tenés una sesión de mazmorra activa.';
+      if (!session) return 'No tenés una sesión de mazmorra activa.';
+      if (!session.activo) {
+        // Sesión muerta: limpiar para permitir una nueva entrada
+        globalThis._mazmorra.delete(me);
+        return '💀 Tu sesión anterior terminó. Volvé a entrar con #mazmorra <apuesta>.';
+      }
 
       const u = econUser(me);
       u.cash += session.ganado;
@@ -1617,107 +1638,6 @@ const commands = {
       globalThis._mazmorra.delete(me);
 
       return ` 🏰 *Mazmorra DKS - Retirada*\n *Pisos superados:* ${session.piso - 1}\n *Ganado:* *${money(session.ganado)}*\n *Total recuperado:* *${money(session.ganado)}*`;
-    },
-  },
-
-  'mazmorra-boss': {
-    desc: ' Enfrenta al jefe de la mazmorra (solo cada 10 pisos). Uso: #mazmorra-boss',
-    execute: async (ctx) => {
-      if (!globalThis._mazmorraBoss) globalThis._mazmorraBoss = new Map();
-      const me = getSenderId(ctx);
-      if (globalThis._mazmorraBoss.has(me)) {
-        return 'Ya estás en un combate contra el jefe. Usá #pelear-boss para atacar.';
-      }
-      const u = econUser(me);
-      rpg.ensureRPG(u);
-
-      if (!u.rpg.clase) {
-        return 'Necesitas elegir una clase con #clase antes de enfrentar al jefe.';
-      }
-
-      const pisoBoss = 10;
-      const bossHp = 500;
-      const bossAtk = 25;
-      const bossNombre = '🐉 Señor de la Mazmorra';
-
-      globalThis._mazmorraBoss.set(me, {
-        hp: bossHp,
-        maxHp: bossHp,
-        atk: bossAtk,
-        nombre: bossNombre,
-        turnos: 0,
-        recompensa: 15000,
-        exp: 300,
-      });
-
-      markEconDirty();
-
-      return ` 🏰 *Mazmorra DKS - Jefe Apareció!*\n\n *Enemigo:* ${bossNombre}\n *HP:* ${bossHp}/${bossHp}\n *ATK:* ${bossAtk}\n\n ¡Un poderoso jefe bloquea tu camino al piso ${pisoBoss}!\n Usá #pelear-boss para atacar.\n ¡Derrotalo para obtener ${money(15000)} y 300 EXP!`;
-    },
-  },
-
-  'pelear-boss': {
-    desc: ' Ataca al jefe de la mazmorra en combate actual.',
-    execute: async (ctx) => {
-      if (!globalThis._mazmorraBoss) return 'No hay combate de jefe activo.';
-      const me = getSenderId(ctx);
-      const boss = globalThis._mazmorraBoss.get(me);
-      if (!boss) return 'No estás en un combate contra el jefe. Usá #mazmorra-boss para iniciar.';
-
-      const u = econUser(me);
-      rpg.ensureRPG(u);
-      const clase = rpg.CLASSES[u.rpg.clase] || { atkBase: 10, defBase: 5 };
-      const arma = rpg.WEAPONS[u.rpg.arma] || { atk: 0 };
-
-      boss.turnos += 1;
-
-      // Daño del jugador
-      const dmgJugador = Math.max(1, clase.atkBase + arma.atk + Math.floor(Math.random() * 6) - 2);
-      boss.hp = Math.max(0, boss.hp - dmgJugador);
-
-      let texto = `⚔️ *Combate contra ${boss.nombre}*\n`;
-      texto += `Atacaste e infligiste *${dmgJugador}* de daño.\n`;
-      texto += `HP del jefe: ${boss.hp}/${boss.maxHp}\n`;
-
-      if (boss.hp <= 0) {
-        // Victoria
-        u.cash += boss.recompensa;
-        u.rpg.exp += boss.exp;
-        // Subir nivel si es necesario
-        while (u.rpg.exp >= u.rpg.nivel * 100) {
-          u.rpg.exp -= u.rpg.nivel * 100;
-          u.rpg.nivel += 1;
-        }
-        globalThis._mazmorraBoss.delete(me);
-        markEconDirty();
-        writeAuditLog('mazmorra-boss', me, me, boss.recompensa, ctx.jid);
-        texto += `\n💀 *¡Derrotaste al jefe!*\n💰 Ganaste ${money(boss.recompensa)}\n⭐ Ganaste ${boss.exp} EXP\n🏆 ¡Puedes continuar al siguiente piso de la mazmorra!`;
-        return texto;
-      }
-
-      // El jefe contraataca
-      const dmgBoss = Math.max(1, boss.atk + Math.floor(Math.random() * 6) - 3);
-      const defensa = clase.defBase || 0;
-      const dmgFinal = Math.max(0, dmgBoss - defensa);
-
-      // Usar oro como "vida" temporal o simplemente registrar daño
-      // Restamos una pequeña cantidad de oro como "costo de curación" o simplemente avisamos
-      texto += `👹 ${boss.nombre} te contraataca e inflige *${dmgFinal}* de daño.\n`;
-      texto += `Turnos: ${boss.turnos}\n`;
-
-      if (boss.turnos >= 15) {
-        // Derrota por tiempo o demasiados turnos
-        const penalidad = Math.floor(u.cash * 0.2);
-        u.cash = Math.max(0, u.cash - penalidad);
-        globalThis._mazmorraBoss.delete(me);
-        markEconDirty();
-        texto += `\n⏰ El jefe te venció tras ${boss.turnos} turnos.\n💸 Perdiste ${money(penalidad)} en la huida.`;
-        return texto;
-      }
-
-      markEconDirty();
-      texto += `\nUsá #pelear-boss para seguir atacando.`;
-      return texto;
     },
   },
 
@@ -1812,7 +1732,7 @@ const commands = {
 
       const u = econUser(me);
       rpg.ensureRPG(u);
-      const clase = rpg.CLASSES[u.rpg.clase] || { atkBase: 10, defBase: 5 };
+      const clase = rpg.getClass(u.rpg.clase) || { atkBase: 10, defBase: 5 };
       const arma = rpg.WEAPONS[u.rpg.arma] || { atk: 0 };
 
       boss.turnos += 1;
@@ -1828,15 +1748,16 @@ const commands = {
       if (boss.hp <= 0) {
         // Victoria
         u.cash += boss.recompensa;
-        u.rpg.exp += boss.exp;
-        while (u.rpg.exp >= u.rpg.nivel * 100) {
-          u.rpg.exp -= u.rpg.nivel * 100;
-          u.rpg.nivel += 1;
-        }
+        u.rpg.statsEnemigosDerrotados = (u.rpg.statsEnemigosDerrotados || 0) + 1;
+        const subida = rpg.addExp(u, boss.exp);
+        const nuevos = rpg.checkTitles(u);
         globalThis._mazmorraBoss.delete(me);
         markEconDirty();
         writeAuditLog('mazmorra-boss', me, me, boss.recompensa, ctx.jid);
-        texto += `\n💀 *¡Derrotaste al jefe!*\n💰 Ganaste ${money(boss.recompensa)}\n⭐ Ganaste ${boss.exp} EXP\n🏆 ¡Puedes continuar en la mazmorra!`;
+        texto += `\n💀 *¡Derrotaste al jefe!*\n💰 Ganaste ${money(boss.recompensa)}\n⭐ Ganaste ${boss.exp} EXP`;
+        if (subida) texto += `\n${subida}`;
+        if (nuevos.length) texto += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
+        texto += `\n🏆 ¡Puedes continuar en la mazmorra!`;
         return texto;
       }
 
@@ -1874,7 +1795,9 @@ const commands = {
         return 'No tienes una clase seleccionada. Usá #clase <guerrero|mago|arquero|pícaro>.';
       }
 
-      const claseSkills = rpg.SKILLS[u.rpg.clase];
+      // Skills por clase base (las evoluciones heredan las de su clase base)
+      const baseKey = { asesino: 'pícaro', gran_arquero: 'arquero', caballero: 'guerrero', archimago: 'mago' }[u.rpg.clase] || u.rpg.clase;
+      const claseSkills = rpg.SKILLS[baseKey] || {};
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const skillKey = args[0] ? args[0].toLowerCase() : '';
 
@@ -1883,17 +1806,20 @@ const commands = {
         for (const [key, s] of Object.entries(claseSkills)) {
           txt += `• *${s.nombre}* - ${s.descripcion}\n   Costo: ${money(s.costo)}\n`;
         }
-        txt += `\nUsá #skill <nombre> para usar una.`;
+        txt += `\nUsá #skill <nombre> para usar una (se aplica en tu próximo ataque de #pelear).`;
         return txt;
       }
 
       const skill = claseSkills[skillKey];
       if (!skill) {
-        return `Habilidad no encontrada. Disponibles: ${Object.keys(claseSkills).join(', ')}.`;
+        return `Habilidad no encontrada. Disponibles: ${Object.keys(claseSkills).join(', ') || 'ninguna'}.`;
       }
 
       const resultado = rpg.useSkill(u, skillKey);
       if (resultado.error) return resultado.error;
+
+      // Guardar efecto pendiente para que combatTurn lo aplique
+      u.rpg.skillPendiente = skill;
 
       markEconDirty();
       writeAuditLog('skill', me, skillKey, resultado.costo, ctx.jid);
@@ -2328,22 +2254,28 @@ const commands = {
   },
 
   clase: {
-    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro|asesino|gran_arquero|caballero|archimago|invocador|nigromante>',
+    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro|invocador|nigromante>',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const clase = args[0] ? args[0].toLowerCase() : '';
-      if (!rpg.CLASSES[clase]) {
-        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}`;
+      const claseData = rpg.CLASSES[clase] || rpg.NUEVAS_CLASES[clase];
+      const esSecundaria = !rpg.CLASSES[clase];
+      if (!claseData) {
+        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\nDesbloqueadas al nivel 10: invocador, nigromante`;
       }
       if (u.rpg.clase) return `Ya tienes la clase *${rpg.classLabel(u.rpg.clase)}*.`;
+      // Clases secundarias: requieren nivel 10
+      if (esSecundaria && u.rpg.nivel < 10) {
+        return `🔒 Necesitas nivel 10 para elegir *${rpg.classLabel(clase)}*. Tu nivel: ${u.rpg.nivel}.`;
+      }
       u.rpg.clase = clase;
       u.rpg.nivel = 1;
       u.rpg.exp = 0;
       markEconDirty();
-      return `✅ ¡Eres ahora *${rpg.classLabel(clase)}*! ${rpg.CLASSES[clase].desc}`;
+      return `✅ ¡Eres ahora *${rpg.classLabel(clase)}*! ${claseData.desc}`;
     },
   },
 
@@ -2678,8 +2610,18 @@ const commands = {
       rpg.ensureRPG(u);
       if (!u.rpg.combate) return 'No estás en un combate. Usá #combate <enemigo> para iniciar.';
       const result = rpg.combatTurn(u, 'atacar');
+      if (!result) {
+        u.rpg.combate = null;
+        markEconDirty();
+        return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
+      }
       markEconDirty();
+      const c = u.rpg.combate;
       let txt = `⚔️ *Combate*\n${result.resultado}`;
+      if (!result.terminado && c) {
+        txt += `\n👹 Enemigo: ${rpg.barra(c.enemyHp, c.enemyMaxHp)} ${c.enemyHp}/${c.enemyMaxHp}`;
+        txt += `\nUsá #pelear para seguir, #skill <nombre> para una habilidad.`;
+      }
       if (result.terminado) {
         txt += `\n🏆 Combate terminado.`;
       }
@@ -2733,6 +2675,7 @@ const commands = {
     desc: ' Trabajá y ganá plata (tiene espera)',
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
       const left = cdLeft(u, 'work', 4 * 60 * 1000);
       if (left > 0) return fmtCooldownMsg(left, 'work');
       if (Math.random() < 1 / 1000000) {
@@ -2779,6 +2722,7 @@ const commands = {
     desc: ' Delito de riesgo: plata o multa (tiene espera)',
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
       const left = cdLeft(u, 'crime', 8 * 60 * 1000);
       if (left > 0) return fmtCooldownMsg(left, 'crime');
       cdSet(u, 'crime');
@@ -2790,8 +2734,12 @@ const commands = {
       }
       const ganancia = rand(1000, 5000);
       u.cash += ganancia;
+      u.rpg.statsCrimenes = (u.rpg.statsCrimenes || 0) + 1;
+      const nuevos = rpg.checkTitles(u);
       saveEcon();
-      return `✿ ${pick(CRIME_WIN)} *${money(ganancia)}*.`;
+      let txt = `✿ ${pick(CRIME_WIN)} *${money(ganancia)}*.`;
+      if (nuevos.length) txt += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
+      return txt;
     },
   },
 
@@ -2804,10 +2752,10 @@ const commands = {
 
       // Calcular racha: si ya reclamó ayer, subir racha; si no, resetear a 1
       const now = Date.now();
-      const lastDaily = u.cd.daily || 0;
+      const lastDaily = (u.cd && u.cd.daily) || 0;
       const diffHours = (now - lastDaily) / (1000 * 60 * 60);
       if (lastDaily && diffHours > 24 && diffHours <= 48) {
-        u.dailyStreak += 1;
+        u.dailyStreak = (typeof u.dailyStreak === 'number' ? u.dailyStreak : 0) + 1;
       } else if (!lastDaily || diffHours > 48) {
         u.dailyStreak = 1;
       }
@@ -2816,7 +2764,7 @@ const commands = {
       const streakBonus = (u.dailyStreak - 1) * 5000; // +5k por cada día extra de racha
       const ganancia = base + streakBonus;
 
-      u.cash += ganancia;
+      u.cash = Math.max(0, u.cash) + ganancia;
       cdSet(u, 'daily');
       saveEcon();
 
@@ -2935,6 +2883,9 @@ const commands = {
         const steal = Math.min(t.cash, Math.max(50, rand(Math.floor(t.cash * 0.1), Math.floor(t.cash * 0.25))));
         t.cash -= steal;
         u.cash += steal;
+        rpg.ensureRPG(u);
+        u.rpg.statsCrimenes = (u.rpg.statsCrimenes || 0) + 1;
+        rpg.checkTitles(u);
         saveEcon();
         return `✿ Robaste *${money(steal)}* a *${displayName(target)}*.`;
       }
@@ -3015,6 +2966,10 @@ const commands = {
       if (amount > u.cash) return `Solo tenés *${money(u.cash)}* en efectivo.`;
       u.cash -= amount;
       u.bank += amount;
+      // Actualizar contador del título Millonario (maxBank)
+      rpg.ensureRPG(u);
+      if (u.bank > (u.rpg.maxBank || 0)) u.rpg.maxBank = u.bank;
+      rpg.checkTitles(u);
       saveEcon();
       return `✿ Depositaste *${money(amount)}* en el banco, ya no podrán robártelo.`;
     },
@@ -3311,7 +3266,16 @@ const processCommand = async (ctx) => {
     }
   }
 
-  const result = await command.execute(ctx);
+  let result;
+  try {
+    result = await command.execute(ctx);
+  } catch (err) {
+    console.error('[cmd error]', resolvedCommand, (err && err.stack) || err);
+    try {
+      await reply(ctx, '❌ Ocurrió un error procesando el comando. Intenta de nuevo.');
+    } catch (e) { /* noop */ }
+    return;
+  }
 
   if (typeof result === 'string') {
     const t0 = Date.now();
