@@ -3268,7 +3268,8 @@ const processCommand = async (ctx) => {
 
   let result;
   try {
-    result = await command.execute(ctx);
+    // Lock por jugador: serializa comandos/combates del mismo usuario
+    result = await rpg.withLock(getSenderId(ctx), () => command.execute(ctx));
   } catch (err) {
     console.error('[cmd error]', resolvedCommand, (err && err.stack) || err);
     try {
