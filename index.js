@@ -2738,12 +2738,18 @@ const commands = {
       if (Math.random() < 1 / 1000000) {
         u.cash += 100000;
         cdSet(u, 'work');
+        u.rpg.statsTrabajos = (u.rpg.statsTrabajos || 0) + 1;
+        rpg.checkTitles(u);
+        markEconDirty();
         saveEcon();
         return `✿ ¡1 EN UN MILLÓN! Mora te donó *${money(100000)}*. ¡IMPOSIBLE!`;
       }
       const ganancia = rand(1000, 1500);
       u.cash += ganancia;
       cdSet(u, 'work');
+      u.rpg.statsTrabajos = (u.rpg.statsTrabajos || 0) + 1;
+      rpg.checkTitles(u);
+      markEconDirty();
       saveEcon();
       return `✿ ${pick(WORK_JOBS)} *${money(ganancia)}*.`;
     },
