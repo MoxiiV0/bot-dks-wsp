@@ -1,7 +1,7 @@
 # Arquitectura del RPG (rework anime)
 
-Estado: **FASE 1 — Arquitectura modular**. Este documento describe la estructura nueva;
-las fases siguientes (2-16) irán rellenando los placeholders señalados.
+Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) completas**.
+Las fases siguientes (3-16) irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -18,19 +18,22 @@ lib/rpg/
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5, placeholder)
+    migrations.js       ← CLASS_MAP (FASE 4), ARMAS_RAREZA (FASE 9) — puro DATA
   core/                 ← lógica en funciones puras cuando sea posible
     narrate.js          ← rand, pick, money, classLabel, weaponLabel, barra (formato WhatsApp)
-    migrate.js          ← ensureRPG (esquema v1, idempotente), migrate (FASE 2: v1→v2 dry-run)
-    stats.js            ← getStats, hpMaxDe, getStatsCompletos, gremio/casa
-    progression.js      ← addExp, títulos, evolución, habilidades por nivel, misiones
+    curve.js            ← expToNext(L)=ceil(40*L^1.65), MAX_LEVEL=60 (FASE 3 la amplía)
+    migrate.js          ← ensureRPG (v1+proyecciones), migración v1→v2 perezosa, dry-run, log
+    stats.js            ← getStats, hpMaxDe, getStatsCompletos, gremio/casa, hp/ki actual
+    progression.js      ← addExp (curva nueva), títulos, evolución, habilidades, misiones
     effects.js          ← useSkill, combinarSkills
     ai.js               ← ataqueEnemigo (FASE 5: arquetipos + fases de jefe)
-    combat.js           ← startCombat, combatTurn (HP real, timeouts, skills, derrota/victoria)
+    combat.js           ← startCombat, combatTurn (HP real, timeouts, skills, tipo de resultado)
     loot.js             ← openChest, generarEventoMazmorra
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
   cli.js                ← npm run cli — inspección de datos y prueba del lock
+  smoke-fase2.js        ← npm test — 32 comprobaciones de esquema/migración
 docs/RPG.md             ← este archivo
 ```
 
@@ -46,6 +49,40 @@ docs/RPG.md             ← este archivo
 4. **Las funciones devuelven `{ resultado | mensaje, ... }` y el caller formatea.**
    Textos en español neutral, <1500 chars, formato WhatsApp (`*negrita*`, `_cursiva_`).
 5. **Cero IP de terceros:** sin Kamehameha, Rasengan, Bankai, etc.
+
+## Esquema v2 (`u.rpg.v === 2`) — FASE 2
+
+```js
+{ v, clase, evolucion, nivel, exp, hp, ki, kiMax, despertar (0-100),
+  puntos (sin gastar), atributos {atk,def,hp,ki,vel},
+  equipo {arma, armadura, accesorio, reliquia}, inventario {id: cantidad},
+  habilidades {id: nivel}, cooldowns {}, estados [], combate (null o estado),
+  portal (null o estado), compañeros [], vinculos {}, rival {nivel, victorias, derrotas},
+  arco {id, capitulo}, rango ('E'..'S'), titulos [], tituloEquipado,
+  stats {kills, pisos, muertes, duelos}, ultimaRegen, inconscienteHasta }
+```
+
+Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
+`gremio`, `misiones`, `pescado`, `minerales`, `aventureros`, `aprendiz`,
+`entrenamiento`, `statsTrabajos/Crimenes`, `maxBank`, `bestiasDomadas`, etc.
+
+### Migración v1 → v2 (`core/migrate.js`)
+
+- **Perezosa:** corre dentro de `ensureRPG` la primera vez que el jugador usa
+  un comando RPG. Guarda: `if (r.v < 2) migrarAV2(u)`.
+- **Idempotente:** segunda llamada no cambia nada (verificado en el smoke test).
+- **dry-run:** `rpg.migrate(u, {dryRun: true})` devuelve
+  `{anadidas[], modificadas[], cambios[]}` sin tocar el estado.
+- **Log:** cada migración con datos previos queda en `logs/rpg-migraciones.log`
+  (una línea JSON con cambios antes/después).
+- Conversiones: `mana → ki` (barra llena), `entrenamiento → atributos`,
+  `stats planos → stats {…}` (v2 es fuente de verdad; `sincronizarProyecciones`
+  espeja v2→v1 en cada `ensureRPG` para los lectores legacy), `exp → curva
+  ceil(40*L^1.65)` sin bajar de nivel, `equipo.arma ← arma`, `titulos ←
+  titulosDesbloqueados` (misma referencia), `cooldowns === cd` (helper `rpgLeft`).
+- **Renombrado FASE 4/9:** `CLASS_MAP`/`ARMAS_RAREZA` en `data/migrations.js`
+  se aplican de forma perezosa y **solo si el destino ya existe en data/** —
+  hoy es no-op y se activará solo cuando FASE 4 agregue `kensei`, `onmyoji`, etc.
 
 ## API principal (fachada `require('./lib/rpg')`)
 
@@ -79,6 +116,7 @@ cambia a `ceil(40 * nivel^1.65)` con máximo nivel 60.
 
 ```bash
 node --check index.js && node --check lib/rpg.js
+npm test                              # 32 comprobaciones de esquema v2 + migración
 node tools/cli.js stats mago
 node tools/cli.js enemies
 node tools/cli.js lock usuario1        # debe imprimir "correcto (serializado): true"
@@ -86,10 +124,14 @@ npm run sim                            # 100 combates: guerrero vs jabali
 npm run sim -- --all 200               # matriz completa
 ```
 
+En WhatsApp: `#clase guerrero` → `#estado` debe mostrar EXP/nivel 40 (curva nueva).
+
 ## Pendiente de fases posteriores
 
-- **FASE 2:** esquema `u.rpg` v2 + `migrate.js` real (dry-run + log).
-- **FASE 3:** curva `ceil(40*L^1.65)`, nivel máx 60, stats escalan con nivel.
-- **FASE 5:** IA con arquetipos/fases, estados (`statuses.js`), combate unificado.
+- **FASE 3:** stats escalan con nivel (crecimiento por clase), puntos de atributo
+  con `#entrenar`, rangos E..S con examen, regeneración por tiempo (`ultimaRegen`),
+  `#descansar`. El tope 60 y la curva ya están (`curve.js`).
+- **FASE 5:** IA con arquetipos/fases, estados (`statuses.js`), combate unificado,
+  Despertar, `inconscienteHasta`.
 - **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
-- **FASE 8:** `arcs.js` real.
+- **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).

@@ -1600,8 +1600,12 @@ const commands = {
       // Evento sobre la sesión (custodia): el botín vive en session.ganado
       const evento = generarEventoMazmorra(session);
 
-      // Contador del título Explorador: mayor piso alcanzado
-      if (session.piso - 1 > (u.rpg.statsPisos || 0)) u.rpg.statsPisos = session.piso - 1;
+      // Contador del título Explorador: mayor piso alcanzado (stats v2 + espejo)
+      if (!u.rpg.stats) u.rpg.stats = { kills: 0, pisos: 0, muertes: 0, duelos: 0 };
+      if (session.piso - 1 > (u.rpg.stats.pisos || 0)) {
+        u.rpg.stats.pisos = session.piso - 1;
+        u.rpg.statsPisos = u.rpg.stats.pisos;
+      }
       const nuevos = rpg.checkTitles(u);
 
       if (!session.activo) {
@@ -1748,7 +1752,9 @@ const commands = {
       if (boss.hp <= 0) {
         // Victoria
         u.cash += boss.recompensa;
-        u.rpg.statsEnemigosDerrotados = (u.rpg.statsEnemigosDerrotados || 0) + 1;
+        if (!u.rpg.stats) u.rpg.stats = { kills: 0, pisos: 0, muertes: 0, duelos: 0 };
+        u.rpg.stats.kills = (u.rpg.stats.kills || 0) + 1;
+        u.rpg.statsEnemigosDerrotados = u.rpg.stats.kills;
         const subida = rpg.addExp(u, boss.exp);
         const nuevos = rpg.checkTitles(u);
         globalThis._mazmorraBoss.delete(me);
