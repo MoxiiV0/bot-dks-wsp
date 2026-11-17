@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -1899,9 +1899,18 @@ const commands = {
       txt += `📛 Nombre: *${s.nombrePersonalizado}*\n`;
       txt += `🛡️ Clase: *${s.clase}*\n`;
       txt += `⭐ Nivel: *${s.nivel}* (EXP: ${s.exp}/${s.expSiguiente})\n`;
-      txt += `⚔️ ATK: *${s.atk}* | 🛡️ DEF: *${s.def}* | ❤️ HP: *${s.hp}*\n`;
+      txt += `⚔️ ATK: *${s.atk}* | 🛡️ DEF: *${s.def}* | 💨 VEL: *${s.vel}*\n`;
+      txt += `❤️ HP: *${s.hpActual}/${s.hp}* | 🌀 Ki: *${s.ki}/${s.kiMax}*\n`;
+      txt += `🎖️ Rango de Cazador: *${rpg.getRango(u).nombre}*\n`;
       txt += `💰 Efectivo: ${money(s.cash)} | 🏦 Banco: ${money(s.bank)} | 🪙 Oro RPG: ${money(s.oro)}\n`;
       txt += `🏠 Casa: *${s.casa}* | 🏰 Gremio: *${s.gremio}*\n`;
+
+      const atri = Object.entries(s.atributos || {}).filter(([, v]) => v > 0);
+      txt += `\n🎯 Puntos de atributo: *${s.puntos}* sin gastar`;
+      if (atri.length) {
+        txt += ` | Invertidos: ${atri.map(([k, v]) => `${rpg.ENTRENAMIENTO.atributos[k].nombre} ${v}`).join(', ')}`;
+      }
+      txt += ` (usá #entrenar)`;
 
       if (s.habilidades && s.habilidades.length > 0) {
         txt += `\n✨ Habilidades Combinadas:\n`;
@@ -1915,6 +1924,73 @@ const commands = {
       }
 
       return txt;
+    },
+  },
+
+  entrenar: {
+    desc: ' Repartir puntos de atributo. Uso: #entrenar <atk|def|hp|ki|vel> [cantidad]',
+    execute: async (ctx) => {
+      const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const clave = args[0] ? args[0].toLowerCase() : '';
+      const cant = args[1] ? parseInt(args[1], 10) : 1;
+
+      if (!clave) {
+        const s = rpg.getStats(u);
+        let txt = `🎯 *Entrenamiento de atributos*\nPuntos disponibles: *${s.puntos}*\n\n`;
+        for (const [k, conf] of Object.entries(rpg.ENTRENAMIENTO.atributos)) {
+          txt += `${conf.nombre}: *${(s.atributos && s.atributos[k]) || 0}* invertidos (${conf.desc})\n`;
+        }
+        txt += `\nUsá: #entrenar <atk|def|hp|ki|vel> [cantidad]\nEj: #entrenar atk 3\n♻️ Reiniciar todo: #reiniciar (cuesta oro)`;
+        return txt;
+      }
+
+      const res = rpg.invertirPunto(u, clave, cant);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      return `💪 ${res.mensaje}`;
+    },
+  },
+
+  reiniciar: {
+    desc: ' Reinicia tus puntos de atributo invertidos (cuesta oro). Uso: #reiniciar',
+    execute: async (ctx) => {
+      const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
+      const res = rpg.reiniciarPuntos(u);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      return `♻️ *Reiniciaste tus atributos.* Recuperaste ${res.invertidos} puntos (costo: ${money(res.costo)}).\nPuntos totales: *${res.puntos}* — repartilos con #entrenar.`;
+    },
+  },
+
+  descansar: {
+    desc: ' Descansar en la posada: recupera todo el HP y Ki (cuesta oro, tiene espera).',
+    execute: async (ctx) => {
+      const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
+      const res = rpg.descansar(u);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      return res.mensaje;
+    },
+  },
+
+  examen: {
+    desc: ' Rendir el examen de ascenso de rango de Cazador. Uso: #examen',
+    execute: async (ctx) => {
+      const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
+      if (u.rpg.combate) return 'Ya estás en combate. Terminalo con #pelear antes de rendir el examen.';
+      const info = rpg.examenActual(u);
+      if (!info.siguiente) return `🏆 Ya tenés el rango máximo: *${info.rangoActual.nombre}*.`;
+      if (!info.puede) {
+        return `📋 Rango actual: *${info.rangoActual.nombre}*\nPara ascender a *${info.siguiente.nombre}* necesitás nivel ${info.requisito} (tu nivel: ${u.rpg.nivel}).`;
+      }
+      const enemy = rpg.startCombat(u, info.examenKey);
+      markEconDirty();
+      return `📋 *Examen de ascenso a ${info.siguiente.nombre}*\nJefe de prueba: *${enemy.nombre}* (HP ${enemy.hp} | ATK ${enemy.atk})\nUsá #pelear para luchar. Si lo vencés, ascendís de rango.`;
     },
   },
 
@@ -2458,16 +2534,28 @@ const commands = {
   },
 
   rango: {
-    desc: ' Ver tu rango en el gremio.',
+    desc: ' Ver tu rango en el gremio y tu rango de Cazador.',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
-      if (!u.rpg.gremio) return 'No estás en un gremio.';
+      const rangoCazador = rpg.getRango(u);
+      let txt = `🎖️ *Rango de Cazador:* *${rangoCazador.nombre}* (nivel ${u.rpg.nivel || 1})\n`;
+      const info = rpg.examenActual(u);
+      if (!info.siguiente) {
+        txt += `🏆 Rango máximo alcanzado.`;
+      } else if (info.puede) {
+        txt += `📋 Podés rendir el examen de *${info.siguiente.nombre}* ahora: #examen`;
+      } else {
+        txt += `🔒 Para el examen de *${info.siguiente.nombre}* necesitás nivel ${info.requisito}.`;
+      }
+      if (!u.rpg.gremio) return txt;
       const g = settings.guilds && settings.guilds[u.rpg.gremio];
-      if (!g) return 'Tu gremio ya no existe.';
-      const rank = rpg.getGuildRank(u.rpg.oro || 0);
-      return `🏅 *Rango en ${g.nombre}:* *${rank.nombre}* (Oro: ${money(u.rpg.oro || 0)})`;
+      if (g) {
+        const rank = rpg.getGuildRank(u.rpg.oro || 0);
+        txt += `\n🏅 *Rango en ${g.nombre}:* *${rank.nombre}* (Oro: ${money(u.rpg.oro || 0)})`;
+      }
+      return txt;
     },
   },
 
@@ -2641,12 +2729,20 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
+      const s = rpg.getStats(u); // aplica la regeneración por tiempo (FASE 3)
       const clase = u.rpg.clase ? rpg.classLabel(u.rpg.clase) : 'Sin clase';
       const arma = rpg.weaponLabel(u.rpg.arma);
       const casa = u.rpg.casa ? rpg.getHouseBenefit(u.rpg.casa).nombre : 'Ninguna';
       const rank = rpg.getGuildRank(u.rpg.oro || 0);
       const gremio = u.rpg.gremio ? (settings.guilds && settings.guilds[u.rpg.gremio] ? settings.guilds[u.rpg.gremio].nombre : 'Desconocido') : 'Ninguno';
-      return `👤 *Estado de Aventurero*\nClase: *${clase}*\nNivel: *${u.rpg.nivel}* (EXP: ${u.rpg.exp}/${u.rpg.nivel * 100})\nArma: *${arma}*\nCasa: *${casa}*\nGremio: *${gremio}*\nRango: *${rank.nombre}*\nOro RPG: ${money(u.rpg.oro || 0)}\n${u.rpg.nombrePersonalizado ? `Nombre: *${u.rpg.nombrePersonalizado}*\n` : ''}`;
+      const rangoCazador = rpg.getRango(u);
+      let txt = `👤 *Estado de Aventurero*\nClase: *${clase}*\nNivel: *${s.nivel}* (EXP: ${s.exp}/${s.expSiguiente})\n`;
+      txt += `❤️ HP: ${rpg.barra(s.hpActual, s.hp)} ${s.hpActual}/${s.hp} | 🌀 Ki: ${rpg.barra(s.ki, s.kiMax)} ${s.ki}/${s.kiMax}\n`;
+      txt += `⚔️ ATK: *${s.atk}* | 🛡️ DEF: *${s.def}* | 💨 VEL: *${s.vel}*\n`;
+      txt += `Arma: *${arma}*\nCasa: *${casa}*\nGremio: *${gremio}*\nRango gremio: *${rank.nombre}* | 🎖️ Cazador: *${rangoCazador.nombre}*\n`;
+      txt += `🎯 Puntos de atributo: *${s.puntos}* (#entrenar)\nOro RPG: ${money(u.rpg.oro || 0)}`;
+      if (u.rpg.nombrePersonalizado) txt += `\nNombre: *${u.rpg.nombrePersonalizado}*`;
+      return txt;
     },
   },
 
@@ -3249,7 +3345,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 

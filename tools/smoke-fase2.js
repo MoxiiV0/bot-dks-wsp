@@ -64,9 +64,11 @@ check('dry-run reporta modificadas', () => assert.ok(res.modificadas.includes('e
 rpg.ensureRPG(legacy);
 const rl = legacy.rpg;
 check('migrado a v2', () => assert.strictEqual(rl.v, 2));
-check('mana convertido a ki (barra llena)', () => {
+check('mana convertido a ki (barra llena, máximo por clase)', () => {
   assert.strictEqual(rl.mana, undefined);
-  assert.strictEqual(rl.ki, 100);
+  // FASE 3: kiMax se computa = kiBase + crecimiento*(nv-1); ki arranca lleno
+  assert.strictEqual(rl.kiMax, 60 + 3 * 11); // guerrero nivel 12
+  assert.strictEqual(rl.ki, rl.kiMax);
 });
 check('exp escalada sin bajar de nivel (3.75% de la curva nueva)', () => {
   const max = rpg.expToNext(12); // ceil(40*12^1.65) = 2414

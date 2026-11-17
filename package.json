@@ -7,7 +7,7 @@
     "start": "node index.js",
     "sim": "node tools/simulate.js",
     "cli": "node tools/cli.js",
-    "test": "node tools/smoke-fase2.js"
+    "test": "node tools/smoke-fase2.js && node tools/smoke-fase3.js"
   },
   "repository": {
     "type": "git",

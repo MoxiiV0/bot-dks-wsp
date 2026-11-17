@@ -1,7 +1,8 @@
 # Arquitectura del RPG (rework anime)
 
-Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) completas**.
-Las fases siguientes (3-16) irán rellenando los placeholders señalados.
+Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
+(progresión y stats) completas**. Las fases siguientes (4-16) irán rellenando
+los placeholders señalados.
 
 ## Estructura
 
@@ -10,30 +11,38 @@ lib/rpg.js              ← fachada legacy: SOLO re-exporta ./rpg/index.js (no t
 lib/rpg/
   index.js              ← compone data/ + core/ y expone la API completa
   data/                 ← TODO el contenido es DATA (cero números mágicos en la lógica)
-    classes.js          ← CLASSES, NUEVAS_CLASES, EVOLUCIONES_CLASE, getClass, baseClassKey
+    classes.js          ← CLASSES/NUEVAS_CLASES con crec{hp,ki,atk,def}, kiBase, velBase,
+                          getGrowth/kiBaseDe/velBaseDe (las evoluciones heredan de la base)
     skills.js           ← SKILLS, COMBINACIONES_SKILLS, HABILIDADES_POR_NIVEL, HABILIDADES_ESPECIALES
     enemies.js          ← ENEMIES, BOSSSES
     zones.js            ← EVENTOS_MAZMORRA, MISSIONS, GUILD_RANKS
-    items.js            ← WEAPONS, HOUSES, CHESTS, WEAPON_CLASSES, ENTRENAMIENTO, MANA
+    items.js            ← WEAPONS, HOUSES, CHESTS, WEAPON_CLASSES, MANA,
+                          ENTRENAMIENTO (puntos/atributos/reinicio), DESCANSO, REGEN
+    ranks.js            ← RANGOS (E..S + nivel de examen), EXAMENES (jefes de prueba)
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5, placeholder)
     migrations.js       ← CLASS_MAP (FASE 4), ARMAS_RAREZA (FASE 9) — puro DATA
   core/                 ← lógica en funciones puras cuando sea posible
     narrate.js          ← rand, pick, money, classLabel, weaponLabel, barra (formato WhatsApp)
-    curve.js            ← expToNext(L)=ceil(40*L^1.65), MAX_LEVEL=60 (FASE 3 la amplía)
-    migrate.js          ← ensureRPG (v1+proyecciones), migración v1→v2 perezosa, dry-run, log
-    stats.js            ← getStats, hpMaxDe, getStatsCompletos, gremio/casa, hp/ki actual
-    progression.js      ← addExp (curva nueva), títulos, evolución, habilidades, misiones
+    curve.js            ← expToNext(L)=ceil(40*L^1.65), MAX_LEVEL=60
+    migrate.js          ← ensureRPG (v1+proyecciones), migración v1→v2 perezosa, dry-run, log,
+                          back-pay de puntos (puntosOtorgados, una sola vez)
+    stats.js            ← getStats (fórmula FASE 3 + regen por tiempo), hpMaxDe, gremio/casa
+    progression.js      ← addExp (puntos + curación 20%), invertirPunto, reiniciarPuntos,
+                          descansar, títulos, evolución, habilidades, misiones
+    ranks.js            ← getRango, examenActual, ascenderRango (rangos de Cazador)
     effects.js          ← useSkill, combinarSkills
     ai.js               ← ataqueEnemigo (FASE 5: arquetipos + fases de jefe)
-    combat.js           ← startCombat, combatTurn (HP real, timeouts, skills, tipo de resultado)
+    combat.js           ← startCombat, combatTurn (HP persistente, exámenes, tipo de resultado)
     loot.js             ← openChest, generarEventoMazmorra
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
+  examen-sim.js         ← node tools/examen-sim.js — balance de exámenes por clase/rango
   cli.js                ← npm run cli — inspección de datos y prueba del lock
   smoke-fase2.js        ← npm test — 32 comprobaciones de esquema/migración
+  smoke-fase3.js        ← npm test — 27 comprobaciones de progresión/stats/rangos
 docs/RPG.md             ← este archivo
 ```
 
@@ -54,7 +63,7 @@ docs/RPG.md             ← este archivo
 
 ```js
 { v, clase, evolucion, nivel, exp, hp, ki, kiMax, despertar (0-100),
-  puntos (sin gastar), atributos {atk,def,hp,ki,vel},
+  puntos (sin gastar), puntosOtorgados (back-pay hecho), atributos {atk,def,hp,ki,vel},
   equipo {arma, armadura, accesorio, reliquia}, inventario {id: cantidad},
   habilidades {id: nivel}, cooldowns {}, estados [], combate (null o estado),
   portal (null o estado), compañeros [], vinculos {}, rival {nivel, victorias, derrotas},
@@ -90,14 +99,44 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 |------|-----------|
 | Estado | `ensureRPG(u)`, `migrate(u, {dryRun})` |
 | Stats | `getStats(u)`, `hpMaxDe(u)`, `getStatsCompletos(u)` |
-| Progresión | `addExp(u, n)`, `checkTitles(u)`, `unlockTitle(u, key)`, `evolucionarClase(u, key)` |
-| Combate | `startCombat(u, enemyKey)`, `combatTurn(u, action)` → `{resultado, terminado, tipo}` |
+| Progresión | `addExp(u, n)`, `invertirPunto(u, clave, n)`, `reiniciarPuntos(u)`, `descansar(u)`, `checkTitles(u)`, `unlockTitle(u, key)`, `evolucionarClase(u, key)` |
+| Rangos | `getRango(u)`, `examenActual(u)`, `ascenderRango(u, key)` |
+| Combate | `startCombat(u, enemyKey)`, `combatTurn(u, action)` → `{resultado, terminado, tipo}`, `getEnemy(key)` |
 | Efectos | `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
-| Datos | `CLASSES`, `ENEMIES`, `SKILLS`, `TITLES`, `WEAPONS`, ... (ver `lib/rpg/index.js`) |
+| Datos | `CLASSES`, `ENEMIES`, `SKILLS`, `TITLES`, `WEAPONS`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
 
 `combatTurn` devuelve `tipo`: `'victoria' | 'derrota' | 'escape' | 'limite' | null`.
+
+## Progresión y stats (FASE 3)
+
+- **Fórmula:** `stat final = base de clase + crecimiento * (L-1) + equipo +
+  título + casa + puntos de atributo`. El crecimiento vive en
+  `data/classes.js` (`crec: {hp, ki, atk, def}`); las evoluciones heredan el de
+  su clase base (`getGrowth`).
+- **Ki/VEL:** `kiMax = kiBase + crec.ki*(L-1) + puntos ki` (computado en cada
+  `getStats`, nunca guardado a mano); `kiBaseDe/velBaseDe` con defaults
+  `KI_SIN_CLASE=100` / `VEL_SIN_CLASE=5`.
+- **Puntos:** 2 por nivel (`ENTRENAMIENTO.puntosPorNivel`), otorgados por
+  `addExp`. Los usuarios legados reciben pago único retroactivo
+  `(nivel-1)*2` con la marca `puntosOtorgados` (en `sincronizarProyecciones`).
+  `#entrenar atk [n]` invierte; `#reiniciar` los devuelve a cambio de oro
+  (`base 500 + 100*nivel` — sumidero).
+- **Regeneración por tiempo (sin timers):** `getStats` aplica contra
+  `ultimaRegen` HP +1%/min y Ki +2%/min (`REGEN` en data), conservando el
+  resto que no llega al minuto. `#descansar` cura 100% por 500 oro con 10 min
+  de espera (`DESCANSO`), bloqueado en combate.
+- **HP persistente:** el combate arranca con el HP actual (`r.hp`), y al
+  terminar (victoria/derrota/escape/límite) el daño sufrido se escribe en
+  `r.hp` — la regeneración y el descanso son ahora la forma de recuperarse.
+- **addExp:** una sola función maneja todos los niveles ganados, da
+  `2*n` puntos, cura 20% de HP/Ki por nivel y limpia EXP en el tope 60.
+- **Rangos de Cazador** (`data/ranks.js` + `core/ranks.js`): E (nv1), D (10),
+  C (20), B (32), A (45), S (58). `#examen` inicia el combate contra el jefe
+  de prueba (`EXAMENES`); la victoria asciende el rango (`ascenderRango`,
+  texto en el resultado del combate). `#rango` muestra rango de Cazador +
+  rango de gremio.
 
 ## Curvas y constantes de combate (FASE 1)
 
@@ -109,14 +148,16 @@ Viven como constantes nombradas en `core/combat.js`:
 - `DERROTA_HP_RESTANTE_PCT` = 30% de HP al escapar derrotado
 - `DOMA_BESTIA_PROB` = 20% (invocador)
 
-La curva de EXP actual es `expSiguiente = nivel * 100` (legado). La FASE 3 la
-cambia a `ceil(40 * nivel^1.65)` con máximo nivel 60.
+La curva de EXP es `expToNext(L) = ceil(40 * L^1.65)` con máximo nivel 60
+(`core/curve.js`); el daño del jugador usa `stats.atk` (base + crecimiento +
+equipo + puntos) desde la FASE 3.
 
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 32 comprobaciones de esquema v2 + migración
+npm test                              # 32 + 27 comprobaciones (FASE 2 y 3)
+node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats mago
 node tools/cli.js enemies
 node tools/cli.js lock usuario1        # debe imprimir "correcto (serializado): true"
@@ -124,14 +165,13 @@ npm run sim                            # 100 combates: guerrero vs jabali
 npm run sim -- --all 200               # matriz completa
 ```
 
-En WhatsApp: `#clase guerrero` → `#estado` debe mostrar EXP/nivel 40 (curva nueva).
+En WhatsApp: `#clase guerrero` → `#estado` (barras HP/Ki, VEL, puntos) →
+`#entrenar atk 3` → `#pelear` para subir → `#examen` en nivel 10 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 3:** stats escalan con nivel (crecimiento por clase), puntos de atributo
-  con `#entrenar`, rangos E..S con examen, regeneración por tiempo (`ultimaRegen`),
-  `#descansar`. El tope 60 y la curva ya están (`curve.js`).
+- **FASE 4:** clases renombradas estilo anime (mapeo `CLASS_MAP` ya preparado).
 - **FASE 5:** IA con arquetipos/fases, estados (`statuses.js`), combate unificado,
-  Despertar, `inconscienteHasta`.
+  Despertar, `inconscienteHasta`, skills con costo de Ki.
 - **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
 - **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).
