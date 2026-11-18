@@ -1761,6 +1761,94 @@ const commands = {
     },
   },
 
+  barrer: {
+    desc: ' Repetir un piso ya superado (simulación de combate que gasta HP/Ki). Uso: #barrer <piso>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const piso = args[0] ? parseInt(args[0], 10) : null;
+      if (!piso || piso < 1) return '⚠️ Uso: #barrer <piso> (número positivo).';
+      // Simulación de piso: gastar HP/Ki y ganar 40% de la EXP normal
+      const s = getStats(u);
+      const hpPerdida = Math.max(1, Math.round(s.hp * 0.10));
+      const kiPerdida = Math.round(s.kiMax * 0.15);
+      u.rpg.hp = Math.max(1, u.rpg.hp - hpPerdida);
+      u.rpg.ki = Math.max(0, u.rpg.ki - kiPerdida);
+      const expGanado = Math.floor(s.exp * 0.4);
+      const subida = addExp(u, expGanado);
+      let txt = `🌀 *Repetición de piso ${piso}*\\n❤️ Perdiste ${hpPerdida} HP (${u.rpg.hp}/${s.hp}).\\n🌀 Perdiste ${kiPerdida} Ki (${u.rpg.ki}/${s.kiMax}).`;
+      if (subida) txt += `\\n${subida}`;
+      txt += '\\nUsá #avanzar para seguir o #retirarse para cobrar.';
+      return txt;
+    },
+  },
+
+  misiones: {
+    desc: ' Misiones diarias (3 tareas). Uso: #misiones',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const hoy = new Date().toISOString().slice(0, 10);
+      u.rpg.misiones = u.rpg.misiones || {};
+      u.rpg.misiones.fecha = u.rpg.misiones.fecha || hoy;
+      // Resetear misiones si es un nuevo día
+      if (u.rpg.misiones.fecha !== hoy) {
+        u.rpg.misiones = { fecha: hoy, tareas: [] };
+      }
+      const tareas = u.rpg.misiones.tareas || [];
+      if (tareas.length === 0) {
+        // Generar 3 misiones nuevas
+        const tipos = ['matar_monstruos', 'superar_pisos', 'derrotar_jefe'];
+        const seleccionadas = [];
+        while (seleccionadas.length < 3 && tipos.length > 0) {
+          const idx = Math.floor(Math.random() * tipos.length);
+          const tipo = tipos.splice(idx, 1)[0];
+          let desc, objetivo;
+          switch (tipo) {
+            case 'matar_monstruos':
+              objetivo = 10;
+              desc = `Matá ${objetivo} monstruos`;
+              break;
+            case 'superar_pisos':
+              objetivo = 15;
+              desc = `Superá ${objetivo} pisos`;
+              break;
+            case 'derrotar_jefe':
+              objetivo = 1;
+              desc = `Derrotá 1 jefe`;
+              break;
+          }
+          seleccionadas.push({ tipo, objetivo, desc });
+        }
+        u.rpg.misiones.tareas = seleccionadas;
+      }
+      let txt = `📋 *Misiones diarias*\\n\\n`;
+      for (const [i, t] of u.rpg.misiones.tareas.entries()) {
+        txt += `${i + 1}. *${t.tipo.replace(/_/g, ' ')}*: ${t.desc}\\n`;
+      }
+      txt += `Usá #completar <tipo> <objetivo> para registrar avance.`;
+      return txt;
+    },
+  },
+
+  completar: {
+    desc: ' Completar un avance de misión diaria. Uso: #completar <tipo> <objetivo>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const tipo = args[0] ? args[0].toLowerCase() : '';
+      const objetivo = args[1] ? parseInt(args[1], 10) : 0;
+      if (!tipo || !objetivo) return '⚠️ Uso: #completar <tipo> <objetivo>.';
+      const progreso = registrarAvanceMision(u, tipo, objetivo);
+      return { exito: true, mensaje: progreso.texto, progreso };
+    },
+  },
+
   cofre: {
     desc: ' Abre un cofre del tesoro. Uso: #cofre <comun|raro|epico|legendario>',
     execute: async (ctx) => {
