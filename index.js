@@ -1690,8 +1690,45 @@ const commands = {
   },
 
   mazmorra: {
-    desc: ' Abre una incursión por pisos (alias de #portal). Uso: #mazmorra <rango>',
-    execute: ejecutarPortal,
+    desc: ' Mazmorras por pisos. Uso: #mazmorra | #mazmorra <id> | #mazmorra continuar',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+
+      if (sub === 'continuar') {
+        const clave = u.rpg.mazmorra_activa;
+        if (!clave) return '⚠️ No tenés una mazmorra activa para continuar.';
+        const res = rpg.avanzarMazmorra(u, clave);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+
+      if (!sub) {
+        const lista = rpg.listaMazmorras();
+        let txt = `🏰 *Mazmorras disponibles*\n\n`;
+        for (const m of lista) {
+          const estado = u.rpg.mazmorras && u.rpg.mazmorras[m.clave]
+            ? ` (piso ${u.rpg.mazmorras[m.clave].pisosVencidos})`
+            : '';
+          txt += `• *${m.nombre}* — nv${m.nivelMin}-${m.nivelMax}${estado}\n`;
+        }
+        txt += `\nUsá #mazmorra <id> para entrar o #mazmorra continuar para reanudar.`;
+        return txt;
+      }
+
+      const clave = sub;
+      const def = rpg.obtenerMazmorra(clave);
+      if (!def) return `⚠️ Mazmorra '${clave}' no encontrada. Usá #mazmorra para ver disponibles.`;
+      const res = rpg.abrirMazmorra(u, clave);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      u.rpg.mazmorra_activa = clave;
+      return res.texto;
+    },
   },
 
   avanzar: {
@@ -1699,7 +1736,9 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       rpg.ensureRPG(u);
-      const res = rpg.avanzarPortal(u);
+      const clave = u.rpg.mazmorra_activa;
+      if (!clave) return '⚠️ No tenés una mazmorra activa. Usá #mazmorra <id> para entrar.';
+      const res = rpg.avanzarMazmorra(u, clave);
       if (res.error) return `⚠️ ${res.error}`;
       markEconDirty();
       return res.texto;
@@ -1707,18 +1746,17 @@ const commands = {
   },
 
   retirarse: {
-    desc: ' Sale del portal conservando todo el botín',
+    desc: ' Sale de la mazmorra conservando todo el botín',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
-      const res = rpg.retirarPortal(u);
+      const clave = u.rpg.mazmorra_activa;
+      if (!clave) return '⚠️ No tenés una mazmorra activa.';
+      const res = rpg.retirarMazmorra(u, clave);
       if (res.error) return `⚠️ ${res.error}`;
-      if (res.pisos > 0 && ctx.jid) {
-        rpg.registrarRanking(settings.chats, ctx.jid, { id: me, nombre: ctx.pushName || me }, res.pisos);
-        saveSettings();
-      }
       markEconDirty();
+      u.rpg.mazmorra_activa = null;
       return res.texto;
     },
   },
