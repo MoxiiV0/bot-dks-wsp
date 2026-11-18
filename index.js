@@ -139,6 +139,7 @@ const markEconDirty = () => {
     }
   }, 200);
 };
+rpg.compañeros.setMarkEconDirty(markEconDirty);
 
 const saveEcon = () => {
   markEconDirty();
@@ -624,6 +625,29 @@ const formatearCombate = (result, u, titulo = 'Combate', meta = null) => {
   if (arcoPost) txt += `\n${arcoPost}`;
   // FASE 9: gastar durabilidad del equipo al terminar un combate.
   if (result.terminado) rpg.gastarDurabilidad(u);
+  // FASE 10: ataque combinado del compañero activo cada 4 turnos si vínculo ≥ 2.
+  if (c && !result.terminado && c.turnos > 0 && c.turnos % 4 === 0 && c.últimoCombinado !== c.turnos) {
+    c.últimoCombinado = c.turnos;
+    const combinado = rpg.aplicarCombateCompañero(u, c.turnos);
+    if (combinado) {
+      txt += `\n✨ ${combinado.banner}`;
+      if (combinado.daño > 0) {
+        c.enemyHp = Math.max(0, c.enemyHp - combinado.daño);
+        txt += `\n💢 ${combinado.nombre} inflige ${combinado.daño} de daño combinado.`;
+      }
+      if (combinado.cura > 0) txt += `\n❤️ ${combinado.nombre} te cura ${combinado.cura} HP.`;
+    }
+  }
+  // FASE 10: al ganar un combate con compañero activo, sube el vínculo.
+  if (result.terminado && result.tipo === 'victoria') {
+    const ca = rpg.compañeroActivo(u);
+    if (ca) {
+      const subió = rpg.sumarPuntoVínculo(u, ca.clave);
+      if (subió && subió.subió) {
+        txt += `\n📈 ¡Vínculo con *${ca.nombre}* subió a nv${subió.nivel}!`;
+      }
+    }
+  }
   return txt;
 };
 
@@ -717,6 +741,51 @@ const ejecutarHab = async (ctx) => {
   markEconDirty();
   const me = getSenderId(ctx);
   return formatearCombate(result, u, 'Habilidad', { jid: ctx.jid, id: me, nombre: ctx.pushName || me });
+};
+
+// FASE 10 — ejecutor compartido para #espiritu y sus alias #domar / #invocar.
+const ejecutorEspíritu = async (ctx) => {
+  const me = getSenderId(ctx);
+  const u = econUser(me);
+  rpg.ensureRPG(u);
+  const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+  const sub = args[0] ? args[0].toLowerCase() : '';
+  const clave = args[1] ? args[1].toLowerCase() : '';
+
+  if (sub === 'listar' || sub === 'lista' || !sub) {
+    return rpg.listarCompañeros(u);
+  }
+  if (sub === 'reclutar') {
+    if (!clave) return 'Uso: #espiritu reclutar <clave>. Escribí #espiritu listar para ver opciones.';
+    const res = rpg.reclutarCompañero(u, clave);
+    if (res.error) return `⚠️ ${res.error}`;
+    markEconDirty();
+    return res.texto;
+  }
+  if (sub === 'activar') {
+    if (!clave) return 'Uso: #espiritu activar <clave>.';
+    const res = rpg.activarCompañero(u, clave);
+    if (res.error) return `⚠️ ${res.error}`;
+    markEconDirty();
+    return res.texto;
+  }
+  if (sub === 'desactivar') {
+    const res = rpg.desactivarCompañero(u);
+    if (res.error) return `⚠️ ${res.error}`;
+    markEconDirty();
+    return res.texto;
+  }
+  if (sub === 'info') {
+    if (!clave) return 'Uso: #espiritu info <clave>.';
+    const datos = rpg.datosDe(clave, 'compañero') || rpg.datosDe(clave, 'espíritu');
+    if (!datos) return 'Compañero no encontrado.';
+    const cp = rpg.compañerosDe(u);
+    const reclutado = cp.reclutas && cp.reclutas.includes(clave);
+    const v = (cp.vínculos && cp.vínculos[clave]) || { nivel: 1, puntos: 0 };
+    const act = cp.activo === clave;
+    return `🐾 *${datos.nombre}*\nRol: *${datos.rol}* | Costo: ${money(datos.costo)} | Req. nivel: ${datos.requisitoNivel}\nReclutado: ${reclutado ? '✅' : '🔒'} | Activo: ${act ? '⚔️' : '—'} | Vínculo: nv${v.nivel} (${v.puntos} pts)\n${datos.banner}`;
+  }
+  return 'Uso: #espiritu | #espiritu listar | #espiritu reclutar <clave> | #espiritu activar <clave> | #espiritu desactivar | #espiritu info <clave>';
 };
 
 const commands = {
@@ -2016,60 +2085,35 @@ const commands = {
     },
   },
 
+  // FASE 10: #espiritu gestiona compañeros y espíritus (vínculo, rol, ataque combinado).
+  // #domar y #invocar quedan como alias.
+  espíritu: {
+    desc: ' Gestiona compañeros y espíritus. Uso: #espiritu | #espiritu listar | #espiritu reclutar <clave> | #espiritu activar <clave> | #espiritu desactivar | #espiritu info <clave>',
+    execute: ejecutorEspíritu,
+  },
+
+  // Aliases legales de #espiritu (mantenidos por compatibilidad FASE 10).
   domar: {
-    desc: ' Domar una bestia para invocarla en combate. Uso: #domar <bestia>',
+    desc: ' Alias de #espiritu. Uso: #domar listar | #domar reclutar <clave> | #domar activar <clave>',
     execute: async (ctx) => {
-      const me = getSenderId(ctx);
-      const u = econUser(me);
-      rpg.ensureRPG(u);
+      ctx.text = ctx.text.replace(/^#domar/i, '#espiritu');
+      return ejecutorEspíritu(ctx);
+    },
+  },
 
-      if (rpg.baseClassKey(u.rpg.clase) !== 'shikigami') {
-        return 'Solo los Shikigami pueden domar bestias. Usá #clase shikigami (nivel 10).';
-      }
-
-      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
-      const bestia = args[0] ? args[0].toLowerCase() : '';
-
-      if (!bestia) {
-        return `Bestias disponibles para domar:\n• lobo (nivel 5)\n• esqueleto (nivel 10)\n• jabali (nivel 15)\nUsá: #domar <bestia>`;
-      }
-
-      if (!u.rpg.bestiasDomadas) u.rpg.bestiasDomadas = [];
-      if (u.rpg.bestiasDomadas.includes(bestia)) return `Ya domaste a ${bestia}.`;
-
-      const nivelesReq = { lobo: 5, esqueleto: 10, jabali: 15 };
-      if (u.rpg.nivel < nivelesReq[bestia]) {
-        return `Necesitas nivel ${nivelesReq[bestia]} para domar a ${bestia}.`;
-      }
-
-      const costo = 1000;
-      if (u.cash < costo) return `No tienes suficiente dinero. Costo: ${money(costo)}.`;
-
-      u.cash = Math.max(0, u.cash - costo);
-      u.rpg.bestiasDomadas.push(bestia);
-      markEconDirty();
-
-      return `🐺 ¡Has domado a ${bestia}! Ahora puedes invocarla en combate con #invocar ${bestia}.`;
+  invocar: {
+    desc: ' Alias de #espiritu. Uso: #invocar listar | #invocar reclutar <clave> | #invocar activar <clave>',
+    execute: async (ctx) => {
+      ctx.text = ctx.text.replace(/^#invocar/i, '#espiritu');
+      return ejecutorEspíritu(ctx);
     },
   },
 
   bestias: {
-    desc: ' Ver tus bestias domadas. Uso: #bestias',
+    desc: ' Alias de #espiritu listar. Uso: #bestias',
     execute: async (ctx) => {
-      const me = getSenderId(ctx);
-      const u = econUser(me);
-      rpg.ensureRPG(u);
-
-      if (!u.rpg.bestiasDomadas || u.rpg.bestiasDomadas.length === 0) {
-        return 'No tienes bestias domadas. Usá #domar <bestia> (solo Invocador).';
-      }
-
-      let txt = `🐾 *Tus Bestias Domadas*\n\n`;
-      for (const b of u.rpg.bestiasDomadas) {
-        txt += `• ${b}\n`;
-      }
-      txt += `\nUsá: #invocar <bestia> en combate.`;
-      return txt;
+      ctx.text = ctx.text.replace(/^#bestias/i, '#espiritu listar');
+      return ejecutorEspíritu(ctx);
     },
   },
 
@@ -3425,7 +3469,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'especial', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales', 'espiritu'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 

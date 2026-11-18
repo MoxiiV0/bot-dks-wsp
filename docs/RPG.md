@@ -3,8 +3,9 @@
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
 unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales) +
-FASE 8 (arcos narrativos) + FASE 9 (equipo, loot y forja) completas**.
-Las fases siguientes (10-16) irán rellenando los placeholders señalados.
+FASE 8 (arcos narrativos) + FASE 9 (equipo, loot y forja) +
+FASE 10 (compañeros y vínculos) completas**. Las fases siguientes
+(11-16) irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -70,6 +71,10 @@ lib/rpg/
                           forjar (oro + materiales), mejorar (+1 a +10, riesgo),
                           reparar (durabilidad), gastarDurabilidad (post-combate),
                           listarEquipo, CATALOGO, obtenerItem, crearItem
+    companions.js         ← FASE 10: compañerosDe, datosDe, reclutar, activar,
+                          desactivar, compañeroActivo, listar, sumarPuntoVínculo,
+                          ataqueCombinado, aplicarCombateCompañero (vínculo 1-5,
+                          ataque combinado cada 4 turnos)
     ai.js               ← FASE 5: confIANZA, faseActual (70/40/15%), decidirIA
                           (atacar/cargar/defender por arquetipo)
     combat.js           ← FASE 5: motor unificado startCombat/combatTurn
@@ -171,6 +176,7 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 | Mundo | `zonaActual(u)`, `puedeViajar(u, zona)`, `viajar(u, zona)`, `cazar(u, ref)`, `listaZonas(u)`, `enemigoZona(key)`, `statsEscala(nivel, tipo)`, `recompensas(nivel)` |
 | Portal | `abrirPortal(u, rango)`, `avanzarPortal(u)`, `retirarPortal(u)`, `portalPostCombate(u, result)`, `estadoPortal(u)`, `llavesDisponibles(u)`, `enemigoPortal(p)`, `registrarRanking(chats, jid, usuario, pisos)`, `rankingGrupo(chats, jid)` |
 | Arcos | `arcoActual(u)`, `iniciarCapitulo(u)`, `listarArcos(u)`, `arcoPostCombate(u, result)`, `ARCS` |
+| Compañeros | `compañerosDe(u)`, `datosDe(clave, tipo)`, `reclutar(u, clave, tipo)`, `activar(u, clave, tipo)`, `desactivar(u)`, `compañeroActivo(u)`, `listar(u)`, `sumarPuntoVínculo(u, clave)`, `ataqueCombinado(u, turnos)`, `aplicarCombateCompañero(u, turnos)`, `COMPANIONES`, `ESPIRITUS`, `VINCULO` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
 | Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, `ZONAS`, `ZONA_INICIAL`, `ESCALADO`, ... (ver `lib/rpg/index.js`) |
 
@@ -389,11 +395,31 @@ Todo el contenido vive en `data/world.js` (DATA pura):
 - **Durabilidad**: opcional (`DURABILIDAD.activada`). Cada combate gasta 1
   punto; al llegar a 0 el item sigue equipado pero sin bonos hasta reparar.
 
+## Compañeros y vínculos (FASE 10)
+
+- **`data/companions.js`**: `COMPANIONES` (5 compañeros reclutables en arcos:
+  Zorro-daño, Lince-tanque, Grulla-curandero, Oni-daño, Fénix-curandero),
+  `ESPIRITUS` (3 espíritus Shikigami: Kodama-curandero, Tengu-daño,
+  Komainu-tanque), `VINCULO` (máx. nivel 5, ataque combinado cada 4 turnos,
+  vínculo mínimo 2), `DAÑO_COMBINADO_POR_ROL`, `CURA_COMBINADA`.
+- **`core/companions.js`**: `compañerosDe` (estado perezoso en
+  `u.rpg.compañeros`), `reclutar` (oro + nivel + arco desbloqueado),
+  `activar`/`desactivar` (uno activo a la vez), `compañeroActivo`, `listar`,
+  `sumarPuntoVínculo` (sube nivel 1-5 al ganar combates),
+  `ataqueCombinado` (daño del compañero cada 4 turnos si vínculo ≥ 2),
+  `aplicarCombateCompañero` (aplica daño/cura al combatir).
+- **`#espiritu`**: `listar`, `reclutar <clave>`, `activar <clave>`,
+  `desactivar`, `info <clave>`. `#domar` y `#invocar` son alias de `#espiritu`.
+  Los Shikigami usan el mismo sistema con espíritus.
+- **Combate**: el compañero activo ataca cada 4 turnos (daño combinado con
+  banner) si el vínculo es ≥ 2; un curandero también cura al jugador. Al
+  ganar, el vínculo sube.
+
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33+27+13+28+30+32+19+23 = 224 comprobaciones (FASE 2-9)
+npm test                              # 33+27+13+28+30+32+19+23+25 = 247 comprobaciones (FASE 2-10)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -410,11 +436,11 @@ En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
 el botín) → `#portal ranking` → `#arco` (ver capítulo actual) →
 `#arco avanzar` (jugar el capítulo) → `#minar` / `#pescar` (materiales) →
 `#forjar arma arma_katana_Raro` → `#equipo` → `#mejorar arma` → `#reparar`
-→ `#examen` en nivel 10 → `#evolucionar` en nivel 15 → `#evolucionar mayor`
-en 35 → `#descansar`.
+→ `#espiritu listar` → `#espiritu reclutar zorro` → `#espiritu activar zorro`
+→ `#cazar` + `#atk` (compañero ataca cada 4 turnos) → `#examen` en nivel 10
+→ `#evolucionar` en nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 10:** `heredaPct` de shikigami. **FASE 11:** dominio de armas.
-- **FASE 12:** economía y anti-abuso. **FASE 13:** comandos y compatibilidad
-  (aliases). Etc.
+- **FASE 11:** dominio de armas. **FASE 12:** economía y anti-abuso.
+- **FASE 13:** comandos y compatibilidad (aliases). Etc.
