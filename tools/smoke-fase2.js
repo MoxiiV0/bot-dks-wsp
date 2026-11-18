@@ -32,7 +32,10 @@ check('campos v2 presentes', () => {
 check('ki lleno (100)', () => assert.strictEqual(rn.ki, 100));
 check('sin mana residual', () => assert.strictEqual(rn.mana, undefined));
 check('stats anidados', () => assert.deepStrictEqual(rn.stats, { kills: 0, pisos: 0, muertes: 0, duelos: 0 }));
-check('equipo.arma = nada', () => assert.strictEqual(rn.equipo.arma, 'nada'));
+check('equipo.arma es null para usuario nuevo (sin arma por defecto)', () => {
+  assert.strictEqual(rn.equipo.arma, null);
+  assert.strictEqual(rn.arma, null);
+});
 check('titulos === titulosDesbloqueados', () => assert.strictEqual(rn.titulos, rn.titulosDesbloqueados));
 check('cooldowns === cd (helper legacy)', () => assert.strictEqual(rn.cooldowns, rn.cd));
 check('hp llena (0 sin clase -> se llena al tener clase)', () => {
@@ -90,7 +93,11 @@ check('títulos conservados', () => {
   assert.deepStrictEqual(rl.titulosDesbloqueados, ['trabajador']);
   assert.strictEqual(rl.tituloEquipado, 'trabajador');
 });
-check('equipo.arma conservada', () => assert.strictEqual(rl.equipo.arma, 'espada_acero'));
+check('equipo.arma es un item FASE 9 (migración de espada_acero)', () => {
+  assert.ok(rl.equipo.arma && rl.equipo.arma.clave, 'debe tener arma equipada');
+  assert.strictEqual(rl.equipo.arma.slot, 'arma');
+  assert.strictEqual(rl.equipo.arma.rareza, 'Epico', 'espada_acero es Épico');
+});
 check('trabajos/crimenes/maxBank intactos (siguen planos)', () => {
   assert.strictEqual(rl.statsTrabajos, 10);
   assert.strictEqual(rl.statsCrimenes, 5);

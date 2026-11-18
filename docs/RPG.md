@@ -3,8 +3,8 @@
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
 unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales) +
-FASE 8 (arcos narrativos) completas**. Las fases siguientes (9-16)
-irán rellenando los placeholders señalados.
+FASE 8 (arcos narrativos) + FASE 9 (equipo, loot y forja) completas**.
+Las fases siguientes (10-16) irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -29,6 +29,11 @@ lib/rpg/
     items.js            ← WEAPONS, HOUSES, CHESTS (+objProb), OBJETOS_COMBATE
                           (FASE 5: pocion_hp/pocion_ki/elixir/antidoto/talisman),
                           WEAPON_CLASSES, MANA, ENTRENAMIENTO, DESCANSO, REGEN
+                          + FASE 9: RAREZAS (Comun/Raro/Epico/Legendario/Mitico),
+                          FAMILIAS_ARMA (katana, tomo, arco yumi, kodachi,
+                          talismán, campana fúnebre), EQUIPO_BASE, MATERIALES,
+                          MATERIAL_COSTO_MEJORA, AFIJOS, AFIJOS_POR_RAREZA,
+                          SETS, PIEZA_SET, DURABILIDAD
     ranks.js            ← RANGOS (E..S + nivel de examen), EXAMENES (jefes de
                           prueba con hp/atk/def/vel — balance FASE 5)
     battle.js           ← FASE 5: BATALLA (fórmula, crítico, defensa, telegrafía,
@@ -47,7 +52,8 @@ lib/rpg/
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5: 8 estados con duración/pila/DOT/textos)
-    migrations.js       ← CLASS_MAP (FASE 4), ARMAS_RAREZA (FASE 9) — puro DATA
+    migrations.js       ← CLASS_MAP (FASE 4), ARMAS_RAREZA (FASE 9: conversión
+                          de armas viejas por tier/rareza) — puro DATA
   core/                 ← lógica en funciones puras cuando sea posible
     narrate.js          ← rand, pick, money, classLabel, weaponLabel, barra (formato WhatsApp)
     curve.js            ← expToNext(L)=ceil(40*L^1.65), MAX_LEVEL=60
@@ -60,6 +66,10 @@ lib/rpg/
     ranks.js            ← getRango, examenActual, ascenderRango (rangos de Cazador)
     effects.js          ← FASE 5: kitDe/resolveHabilidad (#hab: número/id/alias,
                           nivel/Ki/cooldown/ougi) + useSkill/combinarSkills (legado)
+    equipo.js           ← FASE 9: equipoDe, equipar, desequipar, bonosEquipo,
+                          forjar (oro + materiales), mejorar (+1 a +10, riesgo),
+                          reparar (durabilidad), gastarDurabilidad (post-combate),
+                          listarEquipo, CATALOGO, obtenerItem, crearItem
     ai.js               ← FASE 5: confIANZA, faseActual (70/40/15%), decidirIA
                           (atacar/cargar/defender por arquetipo)
     combat.js           ← FASE 5: motor unificado startCombat/combatTurn
@@ -92,6 +102,7 @@ tools/
   smoke-fase6.js        ← npm test — 30 comprobaciones de zonas/escalado/viaje/caza
   smoke-fase7.js        ← npm test — 32 comprobaciones de portales (pisos/botín/ranking)
   smoke-fase8.js        ← npm test — 19 comprobaciones de arcos narrativos
+  smoke-fase9.js        ← npm test — 23 comprobaciones de equipo/loot/forja
 docs/RPG.md             ← este archivo
 ```
 
@@ -350,11 +361,39 @@ Todo el contenido vive en `data/world.js` (DATA pura):
   `globalThis`). El hook `arcoPostCombate` en `formatearCombate` cierra el
   capítulo tras una victoria en combate de arco.
 
+## Equipo, loot y forja (FASE 9)
+
+- **`data/items.js`**: `RAREZAS` (Comun, Raro, Epico, Legendario, Mitico con
+  multiplicador de stats y nº de afijos), `FAMILIAS_ARMA` (Katana/Kensei,
+  Tomo de Sellos/Onmyōji, Arco Yumi/Hayate, Kodachi/Shinobi, Talismán/
+  Shikigami, Campana Fúnebre/Médium Yūrei), `EQUIPO_BASE` (stats base por
+  slot y rareza), `MATERIALES` (fragmento/esencia de mineral, pesca común/
+  dorada), `MATERIAL_COSTO_MEJORA`, `AFIJOS` (crítico, velocidad, roboVida,
+  ki), `AFIJOS_POR_RAREZA`, `SETS` (bono de 3 piezas), `PIEZA_SET`,
+  `DURABILIDAD` (gasto por combate y reparación con oro).
+- **`core/equipo.js`**: `equipoDe` (estado perezoso en `u.rpg.equipo`,
+  migración de armas legacy), `equipar`/`desequipar`, `bonosEquipo` (stats +
+  afijos + sets + mejoras, inyectado en `getStats`), `forjar` (oro + materiales),
+  `mejorar` (+1 a +10 con riesgo creciente), `reparar` (durabilidad),
+  `gastarDurabilidad` (post-combate), `listarEquipo`, `CATALOGO`,
+  `obtenerItem`, `crearItem`.
+- **`#equipo`**: ver equipo equipado e inventario. **`#equipo equipar <slot>
+  <clave>`** / **`#equipo desequipar <slot>`**. **`#forjar <slot> <clave>`**
+  (costo en oro y materiales). **`#mejorar <slot>`** (mejora +1, riesgo de
+  fallo y pérdida de materiales). **`#reparar`** (restaura durabilidad por oro).
+  **`#materiales`**: ver materiales de forja (se obtienen con #minar y #pescar).
+- **Migración**: armas v1 (`r.arma`/`r.armas`) se convierten perezosamente a
+  items FASE 9 con su rareza (`ARMAS_RAREZA` en `data/migrations.js`) al
+  acceder por primera vez. `#armas` y `#herrero` quedan como aliases de
+  `#equipo` y `#forjar`.
+- **Durabilidad**: opcional (`DURABILIDAD.activada`). Cada combate gasta 1
+  punto; al llegar a 0 el item sigue equipado pero sin bonos hasta reparar.
+
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33+27+13+28+30+32+19 = 201 comprobaciones (FASE 2-8)
+npm test                              # 33+27+13+28+30+32+19+23 = 224 comprobaciones (FASE 2-9)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -369,11 +408,13 @@ En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
 `#cazar jefe` para el jefe de zona → `#portal E` (gasta 1 llave) →
 `#avanzar` (pisos: combate/evento/tesoro/santuario) → `#retirarse` (conserva
 el botín) → `#portal ranking` → `#arco` (ver capítulo actual) →
-`#arco avanzar` (jugar el capítulo) → `#examen` en nivel 10 →
-`#evolucionar` en nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
+`#arco avanzar` (jugar el capítulo) → `#minar` / `#pescar` (materiales) →
+`#forjar arma arma_katana_Raro` → `#equipo` → `#mejorar arma` → `#reparar`
+→ `#examen` en nivel 10 → `#evolucionar` en nivel 15 → `#evolucionar mayor`
+en 35 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 9:** equipo real (rarezas con ARMAS_RAREZA). **FASE 10:** `heredaPct`
-  de shikigami. **FASE 11:** dominio de armas. **FASE 12:** economía y
-  anti-abuso. **FASE 13:** comandos y compatibilidad (aliases). Etc.
+- **FASE 10:** `heredaPct` de shikigami. **FASE 11:** dominio de armas.
+- **FASE 12:** economía y anti-abuso. **FASE 13:** comandos y compatibilidad
+  (aliases). Etc.
