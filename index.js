@@ -52,6 +52,7 @@ const saveSettings = () => {
     console.error('No se pudo guardar settings.json:', err.message);
   }
 };
+rpg.setEconomiaHooks(markEconDirty, saveSettings);
 
 loadSettings();
 
@@ -132,6 +133,7 @@ const markEconDirty = () => {
     if (econDirty) {
       econDirty = false;
       try {
+        rpg.respaldoDiario(settings, ECON_FILE);
         atomicWrite(ECON_FILE, JSON.stringify(econ, null, 2));
       } catch (err) {
         console.error('No se pudo guardar economy:', err.message);
@@ -573,7 +575,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales', 'espiritu', 'duelo', 'torneo', 'jefemundial'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -2092,6 +2094,113 @@ const commands = {
     execute: ejecutorEspíritu,
   },
 
+  // FASE 11 — Duelo 1v1 (arena). Uso: #duelo @usuario [apuesta] | #duelo aceptar @usuario | #duelo atk/def/hab <n> | #duelo rendirse | #duelo estado
+  duelo: {
+    desc: ' Duelo 1v1 por turnos con stats normalizadas. Uso: #duelo @usuario [apuesta] | #duelo aceptar @usuario | #duelo atk|def|hab <n>|rendirse|estado',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+      const objetivo = args[1] ? args[1].replace('@', '') : '';
+      const apuesta = args[2] ? args[2] : '0';
+
+      if (sub === 'estado') {
+        const res = rpg.dueloEstado(u);
+        if (res.error) return `⚠️ ${res.error}`;
+        return res.texto;
+      }
+      if (sub === 'rendirse') {
+        const res = rpg.dueloRendirse(u);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+      if (sub === 'aceptar') {
+        const res = rpg.dueloAceptar(u);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+      if (sub === 'atk' || sub === 'def' || sub === 'hab') {
+        const res = rpg.dueloTurno(u, sub, sub === 'hab' ? (args[2] || '1') : undefined);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+      // Iniciar duelo
+      if (!objetivo) return 'Uso: #duelo @usuario [apuesta]';
+      const uOponente = econUser(objetivo);
+      if (uOponente.id === me) return 'No podés duelarte contigo mismo.';
+      const res = rpg.dueloIniciar(u, uOponente, apuesta);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      return res.texto;
+    },
+  },
+
+  // FASE 11 — Torneo semanal (8 jugadores). Uso: #torneo | #torneo inscribir | #torneo ronda | #torneo estado
+  torneo: {
+    desc: ' Torneo semanal de 8 jugadores. Uso: #torneo | #torneo inscribir | #torneo ronda | #torneo estado',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+
+      if (sub === 'inscribir') {
+        const res = rpg.torneoInscribir(u, ctx.jid, settings);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+      if (sub === 'estado') return rpg.torneoEstado(ctx.jid, settings);
+      if (sub === 'ronda') {
+        const res = rpg.torneoRonda(ctx.jid, settings);
+        if (res.error) return `⚠️ ${res.error}`;
+        saveSettings();
+        return res.texto;
+      }
+      return rpg.torneoEstado(ctx.jid, settings);
+    },
+  },
+
+  // FASE 11 — Jefe mundial del grupo. Uso: #jefemundial | #jefemundial iniciar | #jefemundial atacar [daño] | #jefemundial estado
+  'jefemundial': {
+    desc: ' Jefe mundial del grupo. Uso: #jefemundial | #jefemundial iniciar | #jefemundial atacar [daño] | #jefemundial estado',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+
+      if (sub === 'iniciar') {
+        const miembros = settings.guilds && settings.guilds[u.rpg.gremio] ? settings.guilds[u.rpg.gremio].miembros.length : 1;
+        const res = rpg.jefeMundialIniciar(ctx.jid, settings, miembros);
+        if (res.error) return `⚠️ ${res.error}`;
+        saveSettings();
+        return res.texto;
+      }
+      if (sub === 'atacar') {
+        const daño = args[1] ? Number(args[1]) : (getStats(u).atk || 10);
+        const res = rpg.jefeMundialDaño(u, ctx.jid, settings, daño);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        if (res.recompensas && res.recompensas[u.id]) {
+          u.cash = Math.max(0, u.cash + res.recompensas[u.id]);
+          markEconDirty();
+        }
+        saveSettings();
+        return res.texto;
+      }
+      if (sub === 'estado') return rpg.jefeMundialEstado(ctx.jid, settings);
+      return rpg.jefeMundialEstado(ctx.jid, settings);
+    },
+  },
+
   // Aliases legales de #espiritu (mantenidos por compatibilidad FASE 10).
   domar: {
     desc: ' Alias de #espiritu. Uso: #domar listar | #domar reclutar <clave> | #domar activar <clave>',
@@ -3455,7 +3564,7 @@ const commands = {
   },
 };
 
-const commandAliases = { bj: 'blackjack', planto: 'plantarme', plantas: 'plantarme', balance: 'bal', dep: 'deposit', wd: 'withdraw', w: 'work', robar: 'rob', regalo: 'daily', rt: 'ruleta' };
+const commandAliases = { bj: 'blackjack', planto: 'plantarme', plantas: 'plantarme', balance: 'bal', dep: 'deposit', wd: 'withdraw', w: 'work', robar: 'rob', regalo: 'daily', rt: 'ruleta', ficha: 'estado', ascender: 'evolucionar', combo: 'combinar', jefes: 'bosses' };
 
 const processCommand = async (ctx) => {
   if (!ctx.text || !ctx.text.startsWith(config.prefix)) return;
@@ -3469,7 +3578,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'especial', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales', 'espiritu'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'especial', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco', 'equipo', 'forjar', 'mejorar', 'reparar', 'materiales', 'espiritu', 'duelo', 'torneo', 'jefemundial'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 

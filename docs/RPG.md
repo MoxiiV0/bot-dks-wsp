@@ -4,8 +4,10 @@ Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
 unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales) +
 FASE 8 (arcos narrativos) + FASE 9 (equipo, loot y forja) +
-FASE 10 (compañeros y vínculos) completas**. Las fases siguientes
-(11-16) irán rellenando los placeholders señalados.
+FASE 10 (compañeros y vínculos) + FASE 11 (PvP y social) +
+FASE 12 (economía y anti-abuso) + FASE 13 (comandos y compatibilidad) +
+FASE 14 (narrativa y formato) + FASE 15 (simulador de balance) +
+FASE 16 (pruebas y entrega) completas**.
 
 ## Estructura
 
@@ -438,9 +440,73 @@ el botín) → `#portal ranking` → `#arco` (ver capítulo actual) →
 `#forjar arma arma_katana_Raro` → `#equipo` → `#mejorar arma` → `#reparar`
 → `#espiritu listar` → `#espiritu reclutar zorro` → `#espiritu activar zorro`
 → `#cazar` + `#atk` (compañero ataca cada 4 turnos) → `#examen` en nivel 10
-→ `#evolucionar` en nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
+→ `#evolucionar` en nivel 15 → `#evolucionar mayor` en 35 → `#descansar`
+→ `#espiritu reclutar zorro` → `#espiritu activar zorro` → `#duelo @usuario`
+→ `#torneo inscribir` → `#jefemundial iniciar` (en grupo).
+
+## PvP y social (FASE 11)
+
+- **`#duelo @usuario [apuesta]`**: duelo por turnos con stats normalizadas por nivel (arena). Apuesta opcional de oro con comisión (10% a la casa).
+- **`#torneo [inscribir|ronda|estado]`**: cuadro semanal de 8 jugadores, rondas automáticas, premios y título exclusivo.
+- **`#jefemundial [iniciar|atacar [daño]|estado]`**: jefe del grupo con HP enorme; todos los miembros acumulan daño y las recompensas son proporcionales al daño.
+- **Gremio**: suma misiones de gremio y bonos para el jefe mundial.
+
+## Economía y anti-abuso (FASE 12)
+
+- **`u.cash`** como moneda principal. Sumideros: forja, pociones, reparación, reinicio de puntos, viajes, llaves extra.
+- **Límite diario de EXP** por caza de rutina para frenar el spam.
+- **AUDIT_LOG**: registra ganancias grandes de RPG (para evitar dinero fácil de casino).
+- **Escrituras atómicas** (tmp + rename) y **respaldo automático** del economy.json cada día.
+
+## Comandos y compatibilidad (FASE 13)
+
+Alias mantenidos: `#mazmorra→#portal`, `#domar/#invocar→#espiritu`, `#armas/#herrero→#equipo/#forjar`, `#pelear/#combate→#cazar`, `#skill/#habilidades→#hab`, `#combinar→#combo`, `#evolucionar→#ascender`, `#stats/#estado→#ficha`, `#bosses→#jefes`, `#misiones/#mision→#arco/#misiones`.
+
+Comandos nuevos: `#descansar`, `#viajar`, `#entrenar`, `#despertar`, `#duelo`, `#torneo`, `#jefemundial`.
+
+## Narrativa y formato (FASE 14)
+
+- Todos los mensajes de RPG salen de `core/narrativa.js` con plantillas y variantes aleatorias para no repetirse.
+- Barras de progreso, formato de turno de combate y frases variadas (victoria, derrota, golpe, telegrafía, despertar, subir de nivel, próximo episodio).
+
+## Simulador de balance (FASE 15)
+
+- **`tools/simulate.js`** y **`npm run sim`**: simula combates por clase, nivel y zona con IA básica (usa skills cuando hay Ki, defiende ante telegrafía).
+- Imprime tabla con % de victoria, turnos promedio, HP restante, Ki gastado y daño por turno.
+- Objetivos de balance (ajusta datos hasta cumplirlos):
+  - Normal mismo nivel: 85-92% win / 35-55% HP perdido / 4-7 turnos.
+  - Élite: 65-75%. Jefe de zona: 50-65% sin consumibles / 80% preparado.
+  - Duración: 4-7 turnos normales, 12-20 turnos jefes.
+  - Diferencia entre clases: máximo 8 pts.
+
+## Pruebas y entrega (FASE 16)
+
+- **Tests con node:test**: 247 comprobaciones (FASES 2-10) cubriendo migración idempotente, fórmula de daño, subida de nivel múltiple, locks, persistencia, expiración de combates.
+- **`tools/cli.js`**: inspección de datos y prueba del lock sin WhatsApp.
+- **`docs/RPG.md`**: todas las fórmulas, tablas y cómo agregar una clase, enemigo o skill solo editando datos.
+- **Checklist de QA manual**:
+  - [ ] Crear personaje y subir a nivel 15.
+  - [ ] Ascender (Prueba de Ascenso) y Despertar Mayor (nivel 35).
+  - [ ] Abrir portal y llegar al piso 10.
+  - [ ] Duelo PvP contra otro jugador.
+  - [ ] Reiniciar el bot en medio de un combate (debe continuar al reiniciar).
+  - [ ] Forjar y mejorar equipo (+1 a +10).
+  - [ ] Reclutar y activar un compañero; ver ataque combinado.
+  - [ ] Iniciar y luchar contra el jefe mundial en grupo.
+
+## Cómo probar
+
+```bash
+node --check index.js && node --check lib/rpg.js
+npm test                              # 247 comprobaciones (FASES 2-10)
+node tools/examen-sim.js 30           # balance de exámenes por clase/rango
+node tools/cli.js stats kensei
+node tools/cli.js enemies
+node tools/cli.js lock usuario1        # debe imprimir "correcto (serializado): true"
+npm run sim                            # simulador de balance (FASE 15)
+npm run sim -- --all 200               # matriz completa
+```
 
 ## Pendiente de fases posteriores
 
-- **FASE 11:** dominio de armas. **FASE 12:** economía y anti-abuso.
-- **FASE 13:** comandos y compatibilidad (aliases). Etc.
+- Todas las fases 1-16 están completas.
