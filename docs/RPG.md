@@ -2,8 +2,9 @@
 
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
-unificado) + FASE 6 (mundo, zonas y enemigos) completas**. Las fases
-siguientes (7-16) irán rellenando los placeholders señalados.
+unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales)
+completas**. Las fases siguientes (8-16) irán rellenando los placeholders
+señalados.
 
 ## Estructura
 
@@ -37,6 +38,10 @@ lib/rpg/
                           elemento/arquetipo), ZONA_INICIAL, ESCALADO (HP/ATK/
                           DEF por nivel, multipliers élite/jefe, EXP/oro, pesos
                           de caza)
+    portals.js          ← FASE 7: PORTAL (pisos 55/25/10/10, dificultad +4%,
+                          llaves 3/día, jefe cada 10, muerte −50%, ranking)
+                          + EVENTOS_PORTAL (los 5 eventos viejos con efectos
+                          reales: oro, HP/Ki, cura, bono temporal, EXP)
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5: 8 estados con duración/pila/DOT/textos)
@@ -62,9 +67,14 @@ lib/rpg/
                           pasivas, doma shikigami, botín de objetos)
     loot.js             ← openChest (+objProb → OBJETOS_COMBATE), generarEventoMazmorra
     world.js            ← FASE 6: statsEscala, recompensas, enemigoZona,
-                          zonaActual (perezosa), puedeViajar/viajar (nivel +
-                          rango, bloqueado en combate), cazar (peso 80/20,
-                          jefe solo explícito), listaZonas
+                          zonaActual (perezosa), zonaPorNivel, puedeViajar/
+                          viajar (nivel + rango, bloqueado en combate), cazar
+                          (peso 80/20, jefe solo explícito), listaZonas
+    portal.js           ← FASE 7: llavesDisponibles (3/día), abrirPortal,
+                          avanzarPortal (sorteo de piso), retirarPortal,
+                          portalPostCombate (victoria/muerte/huida),
+                          estadoPortal, enemigoPortal (dificultad +4%/piso),
+                          registrarRanking/rankingGrupo (semana ISO)
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
@@ -75,6 +85,7 @@ tools/
   smoke-fase4.js        ← npm test — 13 comprobaciones de clases/evoluciones/pasivas
   smoke-fase5.js        ← npm test — 28 comprobaciones del motor de combate
   smoke-fase6.js        ← npm test — 30 comprobaciones de zonas/escalado/viaje/caza
+  smoke-fase7.js        ← npm test — 32 comprobaciones de portales (pisos/botín/ranking)
 docs/RPG.md             ← este archivo
 ```
 
@@ -141,6 +152,7 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 | Efectos | `kitDe(u)`, `resolveHabilidad(u, ref, c)`, `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
 | Mundo | `zonaActual(u)`, `puedeViajar(u, zona)`, `viajar(u, zona)`, `cazar(u, ref)`, `listaZonas(u)`, `enemigoZona(key)`, `statsEscala(nivel, tipo)`, `recompensas(nivel)` |
+| Portal | `abrirPortal(u, rango)`, `avanzarPortal(u)`, `retirarPortal(u)`, `portalPostCombate(u, result)`, `estadoPortal(u)`, `llavesDisponibles(u)`, `enemigoPortal(p)`, `registrarRanking(chats, jid, usuario, pisos)`, `rankingGrupo(chats, jid)` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
 | Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, `ZONAS`, `ZONA_INICIAL`, `ESCALADO`, ... (ver `lib/rpg/index.js`) |
 
@@ -277,11 +289,43 @@ Todo el contenido vive en `data/world.js` (DATA pura):
 > en rango. El reajuste fino queda para la FASE 15 (donde el prompt autoriza
 > ajustar datos hasta cumplir los objetivos).
 
+## Portales (FASE 7) — reemplazan la mazmorra
+
+- **`#portal <rango|ranking>`** abre una incursión por pisos guardada en
+  `u.rpg.portal` (sin apuesta obligatoria): se gasta **1 llave del día
+  (3/día, `r.portalLlaves`, reset por fecha)** o se pagan `PORTAL.costoOro`
+  (1000) de oro. Los rangos E–S exigen ese rango de Cazador o superior y
+  fijan el nivel base de los enemigos (1/10/20/32/45/58). `#mazmorra` quedó
+  como alias de `#portal` (la sesión vieja en `globalThis` y la apuesta
+  mínima se eliminaron; `#activar-mazmorra` queda como legado inofensivo
+  hasta la FASE 13).
+- **Cada piso** (`PORTAL.pisos`): 55% combate, 25% evento, 10% tesoro,
+  10% santuario. **Dificultad +4% por piso** (compuesta sobre HP/ATK del
+  enemigo, que se genera con `statsEscala` sobre la zona de su rango).
+- **`#avanzar`** sortea y resuelve el piso; **`#retirarse`** conserva todo
+  el botín (el oro ya está acreditado en `u.cash`); **al morir se pierde el
+  50% del botín acumulado** (desde el efectivo, tope 0) y el portal cierra.
+  Huir o llegar al límite de turnos cierra conservando. Expiración por
+  inactividad a los 60 min (timestamp, sin timers) — también conserva.
+- **Jefe de portal cada 10 pisos** (arquetipo `jefe`, fases 70/40/15 del
+  motor FASE 5) con botín extra; enemigos élites con peso 20% (`ESCALADO.caza`).
+- **Los 5 eventos viejos con efectos reales** (`EVENTOS_PORTAL`): Cofre
+  Oculto (+oro al botín), Trampa de Sombras (−15% HP y −30% Ki), Pozo
+  Sanador (+60% HP/Ki), Altar del Sacrificio (−25% HP → **+25% ATK durante
+  3 combates**, `c.bonoAtk` en el motor), Encuentro Místico (+EXP y Ki al 100%).
+- **Ranking semanal por grupo**: `registrarRanking` guarda el top-10 por
+  `settings.chats[jid].portalRanking` con clave de semana ISO
+  (`semanaClave`, reset perezoso); `#portal ranking` lo muestra.
+  Se registra al retirarse y al morir.
+- El hook está en `formatearCombate` (`portalPostCombate`): victoria suma
+  piso y botín, derrota cobra el 50%, huida/limite cierran; si un combate
+  expira sin resultado, el piso se re-sortea con `#avanzar`.
+
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33 + 27 + 13 + 28 + 30 comprobaciones (FASE 2-6)
+npm test                              # 33+27+13+28+30+32 = 163 comprobaciones (FASE 2-7)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -292,12 +336,12 @@ npm run sim -- --all 200               # matriz completa
 
 En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
 (barras HP/Ki, VEL, puntos, zona, medidor de Despertar) → `#entrenar atk 3` →
-`#viajar` (lista zonas) → `#viajar torii` → `#cazar` + `#atk`/`#hab 1`/`#def`
-para subir → `#cazar jefe` para el jefe de zona → `#examen` en nivel 10
-→ `#evolucionar` en nivel 15 (elige rama) → `#evolucionar mayor` en 35 →
-`#descansar`.
+`#viajar` (lista zonas) → `#cazar` + `#atk`/`#hab 1`/`#def` para subir →
+`#cazar jefe` para el jefe de zona → `#portal E` (gasta 1 llave) →
+`#avanzar` (pisos: combate/evento/tesoro/santuario) → `#retirarse` (conserva
+el botín) → `#portal ranking` → `#examen` en nivel 10 → `#evolucionar` en
+nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
 - **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).

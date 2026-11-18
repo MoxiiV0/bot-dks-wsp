@@ -528,55 +528,6 @@ const endBlackjack = (me) => {
   return `${head}${outcome}`;
 };
 
-const generarEventoMazmorra = (session) => {
-  const r = Math.random();
-  const piso = session.piso;
-
-  if (r < 0.55) {
-    // Ganas monedas
-    const base = 500 + piso * 300;
-    const ganancia = Math.floor(base * (0.8 + Math.random() * 0.4));
-    session.ganado += ganancia;
-    return {
-      mensaje: `💰 Encontraste un cofre con *${money(ganancia)}*.`,
-      tipo: 'ganar',
-    };
-  } else if (r < 0.75) {
-    // Encuentro neutral
-    const encuentros = [
-      '🗝️ Encontraste una llave antigua, no sirve para nada pero brilla.',
-      '🦴 Encontraste restos de un aventurero anterior.',
-      '🕯️ Encendiste una antorcha y el pasillo se ilumina.',
-    ];
-    return {
-      mensaje: pick(encuentros),
-      tipo: 'neutral',
-    };
-  } else if (r < 0.88) {
-    // Trampa, pierdes parte de lo ganado
-    const perdida = Math.floor(session.ganado * 0.3);
-    session.ganado = Math.max(0, session.ganado - perdida);
-    if (perdida > 0) {
-      return {
-        mensaje: `💀 Caíste en una trampa y perdiste *${money(perdida)}*.`,
-        tipo: 'trampa',
-      };
-    }
-    return {
-      mensaje: '💀 Caíste en una trampa pero no llevabas nada valioso.',
-      tipo: 'trampa',
-    };
-  } else {
-    // Monstruo, pierdes todo y termina la sesión
-    session.activo = false;
-    session.ganado = 0;
-    return {
-      mensaje: '👹 Un monstruo de la mazmorra te atacó. Perdiste todo lo ganado y la sesión terminó.',
-      tipo: 'muerte',
-    };
-  }
-};
-
 const getChatSettings = (chatId) => {
   const ov = (settings.chats || {})[chatId] || {};
   return {
@@ -620,7 +571,7 @@ const formatTemplate = (template, vars) => {
 
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
-  mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
+  mazmorra: ['portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
   rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
@@ -629,7 +580,7 @@ const helpCategories = {
 
 const helpCategoryLabels = {
   casino: '🎰 Casino, Economía y Juegos',
-  mazmorra: '🏰 Mazmorra',
+  mazmorra: '🏰 Portales y Mazmorra',
   rpg: '🗡️ RPG y Aventura',
   group: '👥 Grupo',
   admin: '🛠️ Administración',
@@ -645,7 +596,7 @@ const isRestricted = (cmd) =>
 
 // --- FASE 5: helpers del motor de combate unificado ---------------------------
 // Formatea el resultado de rpg.combatTurn con barras y hints de acción.
-const formatearCombate = (result, u, titulo = 'Combate') => {
+const formatearCombate = (result, u, titulo = 'Combate', meta = null) => {
   let txt = `⚔️ *${titulo}*\n${result.resultado}`;
   const c = u.rpg.combate;
   if (!result.terminado && c) {
@@ -658,12 +609,56 @@ const formatearCombate = (result, u, titulo = 'Combate') => {
   } else if (result.terminado && result.tipo === 'victoria') {
     txt += '\n🏆 Combate terminado.';
   }
+  // FASE 7: la incursión de portal reacciona al final del combate (victoria
+  // suma piso/botín, derrota cobra el 50%, huida/limite cierran conservando).
+  const post = rpg.portalPostCombate(u, result);
+  if (post) {
+    txt += `\n${post.texto}`;
+    if (post.pisos > 0 && meta && meta.jid) {
+      rpg.registrarRanking(settings.chats, meta.jid, { id: meta.id, nombre: meta.nombre }, post.pisos);
+      saveSettings();
+    }
+  }
   return txt;
+};
+
+// FASE 7: si un combate de portal expira sin resultado (10 min), se libera
+// el piso para re-sortearlo con #avanzar (sin perder la incursión).
+const limpiarPortalCombate = (u) => {
+  const p = u.rpg && u.rpg.portal;
+  if (p && p.enCombate) {
+    p.enCombate = false;
+    p.piso = Math.max(0, p.piso - 1);
+    return '\n🌀 El piso del portal se re-sorteará con #avanzar.';
+  }
+  return '';
+};
+
+// Ejecuta #portal (y su alias #mazmorra): ranking, estado o apertura.
+const ejecutarPortal = async (ctx) => {
+  const me = getSenderId(ctx);
+  const u = econUser(me);
+  rpg.ensureRPG(u);
+  const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+  const sub = args[0] ? args[0].toLowerCase() : '';
+
+  if (sub === 'ranking') {
+    const txt = rpg.rankingGrupo(settings.chats, ctx.jid);
+    saveSettings(); // el corte semanal puede haber reiniciado el ranking
+    return txt || '🏆 Todavía no hay récords semanales en este chat. Abrí un portal con #portal <rango> y anotá tus pisos.';
+  }
+  if (!sub) return rpg.estadoPortal(u);
+
+  const res = rpg.abrirPortal(u, args[0]);
+  if (res.error) return `⚠️ ${res.error}`;
+  markEconDirty();
+  return res.texto;
 };
 
 // Ejecuta una acción del motor (atk/hab/def/obj/huir y sus aliases legados).
 const accionCombate = (accion, titulo) => async (ctx) => {
-  const u = econUser(getSenderId(ctx));
+  const me = getSenderId(ctx);
+  const u = econUser(me);
   rpg.ensureRPG(u);
   if (!u.rpg.combate) {
     return 'No estás en un combate. Usá #combate <enemigo>, #examen o #mazmorra-boss <clave> para iniciar.';
@@ -672,11 +667,12 @@ const accionCombate = (accion, titulo) => async (ctx) => {
   const result = rpg.combatTurn(u, accion, args[0]);
   if (!result) {
     u.rpg.combate = null;
+    const extra = limpiarPortalCombate(u);
     markEconDirty();
-    return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
+    return `El combate ya no es válido. Volvé a empezar con #combate <enemigo>.${extra}`;
   }
   markEconDirty();
-  return formatearCombate(result, u, titulo);
+  return formatearCombate(result, u, titulo, { jid: ctx.jid, id: me, nombre: ctx.pushName || me });
 };
 
 // Ejecuta #hab: lista el kit sin argumento, o lanza la habilidad en combate.
@@ -709,11 +705,13 @@ const ejecutarHab = async (ctx) => {
   const result = rpg.combatTurn(u, 'habilidad', ref);
   if (!result) {
     u.rpg.combate = null;
+    const extra = limpiarPortalCombate(u);
     markEconDirty();
-    return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
+    return `El combate ya no es válido. Volvé a empezar con #combate <enemigo>.${extra}`;
   }
   markEconDirty();
-  return formatearCombate(result, u, 'Habilidad');
+  const me = getSenderId(ctx);
+  return formatearCombate(result, u, 'Habilidad', { jid: ctx.jid, id: me, nombre: ctx.pushName || me });
 };
 
 const commands = {
@@ -1608,113 +1606,42 @@ const commands = {
     },
   },
 
+  portal: {
+    desc: ' Abre una incursión por pisos. Uso: #portal <E|D|C|B|A|S|ranking>',
+    execute: ejecutarPortal,
+  },
+
   mazmorra: {
-    desc: ' Entrá a la mazmorra. Uso: #mazmorra <apuesta> (mínimo 1000)',
-    execute: async (ctx) => {
-      if (!ctx.isGroup) return 'Este comando solo funciona en grupos.';
-      if (!settings.chats[ctx.jid] || !settings.chats[ctx.jid].mazmorraActiva) {
-        return '🔒 La mazmorra no está activa en este grupo. Un admin debe activarla con: #activar-mazmorra on';
-      }
-      if (!globalThis._mazmorra) globalThis._mazmorra = new Map();
-      const me = getSenderId(ctx);
-      const sesionPrevia = globalThis._mazmorra.get(me);
-      if (sesionPrevia && sesionPrevia.activo) {
-        return 'Ya tenés una sesión de mazmorra activa. Usá #avanzar o #retirarse.';
-      }
-      if (sesionPrevia) globalThis._mazmorra.delete(me); // limpiar sesión muerta
-      const u = econUser(me);
-      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
-      const betArg = args[0];
-      let bet;
-      if (!betArg) return 'Uso: #mazmorra <apuesta> (mínimo 1000 Coins). Ej: #mazmorra 1000';
-      if (betArg === 'all' || betArg === 'todo') bet = u.cash;
-      else if (/^\d+$/.test(betArg)) bet = parseInt(betArg, 10);
-      else return 'Uso: #mazmorra <apuesta> (mínimo 1000 Coins). Ej: #mazmorra 1000';
-      if (!bet || bet < 1000) return 'La apuesta mínima es de *1000 Coins*.';
-      if (bet > u.cash) return 'No tienes suficiente dinero para entrar.';
-
-      u.cash = Math.max(0, u.cash - bet);
-      markEconDirty();
-
-      const session = {
-        bet,
-        piso: 1,
-        ganado: 0,
-        activo: true,
-        started: Date.now(),
-      };
-      globalThis._mazmorra.set(me, session);
-
-      const evento = generarEventoMazmorra(session);
-
-      // Si el evento de entrada terminó la sesión, limpiar para no bloquear
-      if (!session.activo) {
-        globalThis._mazmorra.delete(me);
-        markEconDirty();
-        return ` 🏰 *Mazmorra DKS - Piso 1*\n *Apuesta:* *${money(bet)}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó en el primer piso.* Volvé a intentar con #mazmorra.`;
-      }
-
-      markEconDirty();
-      return ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Apuesta:* *${money(bet)}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
-    },
+    desc: ' Abre una incursión por pisos (alias de #portal). Uso: #mazmorra <rango>',
+    execute: ejecutarPortal,
   },
 
   avanzar: {
-    desc: ' Avanza al siguiente piso de la mazmorra',
+    desc: ' Avanza al siguiente piso del portal',
     execute: async (ctx) => {
-      if (!globalThis._mazmorra) return 'No tenés sesión activa. Escribí #mazmorra para entrar.';
-      const me = getSenderId(ctx);
-      const session = globalThis._mazmorra.get(me);
-      if (!session || !session.activo) return 'No tenés una sesión de mazmorra activa. Escribí #mazmorra para entrar.';
-
-      session.piso += 1;
-      const u = econUser(me);
+      const u = econUser(getSenderId(ctx));
       rpg.ensureRPG(u);
-      // Evento sobre la sesión (custodia): el botín vive en session.ganado
-      const evento = generarEventoMazmorra(session);
-
-      // Contador del título Explorador: mayor piso alcanzado (stats v2 + espejo)
-      if (!u.rpg.stats) u.rpg.stats = { kills: 0, pisos: 0, muertes: 0, duelos: 0 };
-      if (session.piso - 1 > (u.rpg.stats.pisos || 0)) {
-        u.rpg.stats.pisos = session.piso - 1;
-        u.rpg.statsPisos = u.rpg.stats.pisos;
-      }
-      const nuevos = rpg.checkTitles(u);
-
-      if (!session.activo) {
-        globalThis._mazmorra.delete(me);
-        markEconDirty();
-        let txt = ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n\n${evento.mensaje}\n\n💀 *La sesión terminó. Perdiste todo lo ganado.*`;
-        if (nuevos.length) txt += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
-        return txt;
-      }
-
+      const res = rpg.avanzarPortal(u);
+      if (res.error) return `⚠️ ${res.error}`;
       markEconDirty();
-      let txt = ` 🏰 *Mazmorra DKS - Piso ${session.piso}*\n *Apuesta:* *${money(session.bet)}*\n *Ganado hasta ahora:* *${money(session.ganado)}*\n\n${evento.mensaje}\n\nUsá #avanzar para seguir o #retirarse para cobrar.`;
-      if (nuevos.length) txt += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
-      return txt;
+      return res.texto;
     },
   },
 
   retirarse: {
-    desc: ' Sale de la mazmorra con lo ganado',
+    desc: ' Sale del portal conservando todo el botín',
     execute: async (ctx) => {
-      if (!globalThis._mazmorra) return 'No tenés sesión activa.';
       const me = getSenderId(ctx);
-      const session = globalThis._mazmorra.get(me);
-      if (!session) return 'No tenés una sesión de mazmorra activa.';
-      if (!session.activo) {
-        // Sesión muerta: limpiar para permitir una nueva entrada
-        globalThis._mazmorra.delete(me);
-        return '💀 Tu sesión anterior terminó. Volvé a entrar con #mazmorra <apuesta>.';
-      }
-
       const u = econUser(me);
-      u.cash += session.ganado;
+      rpg.ensureRPG(u);
+      const res = rpg.retirarPortal(u);
+      if (res.error) return `⚠️ ${res.error}`;
+      if (res.pisos > 0 && ctx.jid) {
+        rpg.registrarRanking(settings.chats, ctx.jid, { id: me, nombre: ctx.pushName || me }, res.pisos);
+        saveSettings();
+      }
       markEconDirty();
-      globalThis._mazmorra.delete(me);
-
-      return ` 🏰 *Mazmorra DKS - Retirada*\n *Pisos superados:* ${session.piso - 1}\n *Ganado:* *${money(session.ganado)}*\n *Total recuperado:* *${money(session.ganado)}*`;
+      return res.texto;
     },
   },
 
@@ -2790,7 +2717,7 @@ const commands = {
       rpg.ensureRPG(u);
 
       if (u.rpg.tutorialCompletado) {
-        return 'Ya completaste el tutorial de la mazmorra. Usá #mazmorra para entrar.';
+        return 'Ya completaste el tutorial de la mazmorra. Usá #portal E para abrir tu primer portal.';
       }
 
       // Regalo inicial: espada de hierro + 2000 Coins
@@ -2805,7 +2732,7 @@ const commands = {
       u.rpg.tutorialCompletado = true;
       markEconDirty();
 
-      return ` 🏰 *Tutorial de la Mazmorra DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${rpg.weaponLabel('espada_hierro')}* (ATK +8).\n\n📖 *Cómo jugar:*\n• Escribí #mazmorra <apuesta> para entrar a la mazmorra (mínimo 1000 Coins).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir con lo ganado.\n• Cuidado: si un monstruo te derrota, pierdes todo lo ganado en la sesión.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
+      return ` 🏰 *Tutorial de Portales DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${rpg.weaponLabel('espada_hierro')}* (ATK +8).\n\n📖 *Cómo jugar:*\n• Escribí #portal E para abrir una incursión por pisos (gasta 1 llave al día o ${money(rpg.PORTAL.costoOro)} de oro).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir conservando todo el botín.\n• Cuidado: si un monstruo te derrota, pierdes el 50% del botín acumulado.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
     },
   },
 
@@ -3381,7 +3308,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
