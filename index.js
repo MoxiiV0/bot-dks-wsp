@@ -2018,26 +2018,45 @@ const commands = {
       if (!u.rpg.clase) return 'No tienes una clase seleccionada. Usá #clase primero.';
 
       if (!nuevaClave) {
-        // Despertar Mayor disponible
-        if (u.rpg.claseEvolucionada && !u.rpg.despertarMayor) {
-          const disp = u.rpg.nivel >= rpg.DESPERTAR_MAYOR.requisito;
-          const marca = disp ? '✅ Disponible ahora' : `🔒 Necesita nivel ${rpg.DESPERTAR_MAYOR.requisito} (tu nivel: ${u.rpg.nivel})`;
-          let txt = `🌟 *Despertar Mayor* — ${marca}\nMejora la pasiva de tu rama actual.\nUsá: #evolucionar mayor\n\n`;
-          const rama = rpg.CLASES_EVOLUCION[u.rpg.clase];
-          if (rama) txt += `Rama actual: *${rama.nombre}*`;
+        // Clase Avanzada (nivel 35) - elegir de las dos opciones de tu subclase
+        if (u.rpg.subclase && !u.rpg.despertarMayor) {
+          const avanzadas = Object.values(rpg.CLASES_AVANZADAS).filter(a => a.subclase === u.rpg.subclase);
+          if (avanzadas.length === 0) return 'Tu subclase no tiene clase avanzada disponible.';
+          let txt = `🔄 *Clase Avanzada* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí tu clase avanzada:\n\n`;
+          for (const av of avanzadas) {
+            const marca = u.rpg.nivel >= av.requisito ? '✅' : `🔒 nv${av.requisito}`;
+            txt += `• ${marca} *${av.nombre}* — ${av.desc}\n`;
+          }
+          txt += `\nUsá: #evolucionar <clave>`;
           return txt;
         }
-        if (u.rpg.despertarMayor) return '🌟 Ya completaste el Despertar Mayor. Tu clase está en su forma máxima.';
+        if (u.rpg.despertarMayor) return '🌟 Ya completaste tu clase avanzada. Tu clase está en su forma máxima.';
 
-        const ramas = rpg.EVOLUCIONES_CLASE[rpg.baseClassKey(u.rpg.clase)] || [];
-        if (ramas.length === 0) return 'Tu clase no tiene Prueba de Ascenso disponible.';
-        let txt = `🔄 *Prueba de Ascenso* — ${rpg.classLabel(u.rpg.clase)} (tu nivel: ${u.rpg.nivel})\nElegí uno de tus dos caminos:\n\n`;
-        for (const rama of ramas) {
-          const destino = rpg.CLASES_EVOLUCION[rama.nombre];
-          const marca = u.rpg.nivel >= rama.requisito ? '✅' : `🔒 nv${rama.requisito}`;
-          txt += `• ${marca} *${destino ? destino.nombre : rama.nombre}* — ${destino ? destino.desc : ''}\n`;
+        // Subclase (nivel 15) - elegir una de las dos ramas de tu clase base
+        if (u.rpg.claseEvolucionada) {
+          if (u.rpg.nivel >= rpg.DESPERTAR_MAYOR.requisito) {
+            const avanzadas = Object.values(rpg.CLASES_AVANZADAS).filter(a => a.subclase === u.rpg.subclase);
+            if (avanzadas.length === 0) return 'Tu subclase no tiene clase avanzada disponible.';
+            let txt = `🔄 *Clase Avanzada* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí tu clase avanzada:\n\n`;
+            for (const av of avanzadas) {
+              const marca = u.rpg.nivel >= av.requisito ? '✅' : `🔒 nv${av.requisito}`;
+              txt += `• ${marca} *${av.nombre}* — ${av.desc}\n`;
+            }
+            txt += `\nUsá: #evolucionar <clave>`;
+            return txt;
+          }
+          return { error: 'Ya completaste tu evolución de clase.' };
         }
-        txt += `\nUsá: #evolucionar <rama>`;
+
+        const base = rpg.baseClassKey(u.rpg.clase);
+        const subclases = Object.values(rpg.SUBCLASES).filter(s => s.claseBase === base);
+        if (subclases.length === 0) return 'Tu clase no tiene subclases disponibles.';
+        let txt = `🔄 *Prueba de Ascenso* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí una de tus dos subcases:\n\n`;
+        for (const sub of subclases) {
+          const marca = u.rpg.nivel >= sub.requisito ? '✅' : `🔒 nv${sub.requisito}`;
+          txt += `• ${marca} *${sub.nombre}* — ${sub.desc}\n`;
+        }
+        txt += `\nUsá: #evolucionar <clave>`;
         return txt;
       }
 
@@ -2458,19 +2477,14 @@ const commands = {
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const entrada = args[0] ? args[0].toLowerCase() : '';
       // FASE 4: acepta nombres viejos (guerrero, mago…) como alias de los nuevos
-      const clase = (rpg.CLASS_MAP[entrada] && (rpg.CLASSES[rpg.CLASS_MAP[entrada]] || rpg.NUEVAS_CLASES[rpg.CLASS_MAP[entrada]]))
+      const clase = (rpg.CLASS_MAP[entrada] && rpg.CLASSES[rpg.CLASS_MAP[entrada]])
         ? rpg.CLASS_MAP[entrada]
         : entrada;
-      const claseData = rpg.CLASSES[clase] || rpg.NUEVAS_CLASES[clase];
-      const esSecundaria = !rpg.CLASSES[clase];
+      const claseData = rpg.CLASSES[clase];
       if (!claseData) {
-        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\nDesbloqueadas al nivel 10: ${Object.keys(rpg.NUEVAS_CLASES).join(', ')}\n(También acepta los nombres clásicos: ${Object.keys(rpg.CLASS_MAP).join(', ')})`;
+        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\n(También acepta los nombres clásicos: ${Object.keys(rpg.CLASS_MAP).join(', ')})`;
       }
       if (u.rpg.clase) return `Ya tienes la clase *${rpg.classLabel(u.rpg.clase)}*.`;
-      // Clases secundarias: requieren nivel 10 (misión especial)
-      if (esSecundaria && u.rpg.nivel < 10) {
-        return `🔒 Necesitas nivel 10 para elegir *${rpg.classLabel(clase)}*. Tu nivel: ${u.rpg.nivel}.`;
-      }
       // FASE 4: elegir clase ya NO resetea nivel/exp
       u.rpg.clase = clase;
       markEconDirty();
