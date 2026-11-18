@@ -572,7 +572,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -619,6 +619,9 @@ const formatearCombate = (result, u, titulo = 'Combate', meta = null) => {
       saveSettings();
     }
   }
+  // FASE 8: si el combate terminado era un capítulo de arco narrativo, cierra el capítulo.
+  const arcoPost = rpg.arcoPostCombate(u, result);
+  if (arcoPost) txt += `\n${arcoPost}`;
   return txt;
 };
 
@@ -1901,6 +1904,30 @@ const commands = {
       const enemy = rpg.startCombat(u, info.examenKey);
       markEconDirty();
       return `📋 *Examen de ascenso a ${info.siguiente.nombre}*\nJefe de prueba: *${enemy.nombre}* (HP ${enemy.hp} | ATK ${enemy.atk})\nUsá #atk para luchar, #hab <n> para habilidades y #def ante sus cargas. Si lo vencés, ascendís de rango.`;
+    },
+  },
+
+  arco: {
+    desc: ' Arco narrativo. Uso: #arco | #arco avanzar | #arco listar',
+    execute: async (ctx) => {
+      const u = econUser(getSenderId(ctx));
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+      if (sub === 'listar' || sub === 'lista') return rpg.listarArcos(u);
+      if (sub === 'avanzar' || sub === 'siguiente') {
+        const res = rpg.iniciarCapitulo(u);
+        if (res.tipo === 'bloqueado') return `⚠️ ${res.texto}`;
+        if (res.tipo === 'completado') return res.texto;
+        markEconDirty();
+        return res.texto;
+      }
+      const { arco, indice, capitulo } = rpg.arcoActual(u);
+      let txt = `📖 *${arco.nombre}* — Capítulo ${indice + 1}/${arco.capitulos.length}: *${capitulo.titulo}*\n`;
+      const primera = capitulo.dialogo[0];
+      if (primera) txt += `${primera.quien}: ${primera.linea}\n`;
+      txt += `Usá #arco avanzar para comenzar el capítulo.`;
+      return txt;
     },
   },
 
@@ -3308,7 +3335,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'portal', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'cazar', 'viajar', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen', 'arco'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 

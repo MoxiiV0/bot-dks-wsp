@@ -310,7 +310,9 @@ check('turno sin fin no cierra nada (solo actúa con terminado)', () => {
 console.log('Retirada:');
 check('retirarse conserva el botín (ya acreditado) y limpia el portal', () => {
   const u = jugador();
-  rpg.abrirPortal(u, 'E');
+  // forzar sorteo de piso no-combate (tesoro) para probar la retirada limpia
+  const resAbrir = conRandom(0.85, () => rpg.abrirPortal(u, 'E'));
+  assert.ok(!resAbrir.error, resAbrir.error);
   u.rpg.portal.botin = 420;
   u.rpg.portal.pisosVencidos = 5;
   const cashAntes = u.cash;

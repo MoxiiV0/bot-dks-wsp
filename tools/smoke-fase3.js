@@ -254,6 +254,7 @@ check('derrota en el examen NO asciende y conserva HP a 30%', () => {
   u.rpg.nivel = 10;
   rpg.startCombat(u, 'examen_d');
   u.rpg.combate.hpJugador = 1; // el contraataque lo tumbará
+  u.rpg.combate.cargando = true; // el jefe descarga su ataque cargado este turno
   const res = rpg.combatTurn(u, 'atacar');
   assert.strictEqual(res.tipo, 'derrota');
   assert.ok(res.resultado.includes('No aprobaste'));

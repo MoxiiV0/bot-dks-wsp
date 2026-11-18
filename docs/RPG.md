@@ -2,9 +2,9 @@
 
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
-unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales)
-completas**. Las fases siguientes (8-16) irán rellenando los placeholders
-señalados.
+unificado) + FASE 6 (mundo, zonas y enemigos) + FASE 7 (portales) +
+FASE 8 (arcos narrativos) completas**. Las fases siguientes (9-16)
+irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -42,6 +42,8 @@ lib/rpg/
                           llaves 3/día, jefe cada 10, muerte −50%, ranking)
                           + EVENTOS_PORTAL (los 5 eventos viejos con efectos
                           reales: oro, HP/Ki, cura, bono temporal, EXP)
+    arcs.js             ← FASE 8: ARCS (4 arcos x 8 capítulos con diálogo,
+                          combate/prueba, recompensa y "Próximo episodio")
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5: 8 estados con duración/pila/DOT/textos)
@@ -75,6 +77,9 @@ lib/rpg/
                           portalPostCombate (victoria/muerte/huida),
                           estadoPortal, enemigoPortal (dificultad +4%/piso),
                           registrarRanking/rankingGrupo (semana ISO)
+    arcs.js             ← FASE 8: arcoActual (perezoso), iniciarCapitulo
+                          (combate/prueba), listarArcos, arcoPostCombate
+                          (cierra capítulo tras victoria), ARCS
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
@@ -86,6 +91,7 @@ tools/
   smoke-fase5.js        ← npm test — 28 comprobaciones del motor de combate
   smoke-fase6.js        ← npm test — 30 comprobaciones de zonas/escalado/viaje/caza
   smoke-fase7.js        ← npm test — 32 comprobaciones de portales (pisos/botín/ranking)
+  smoke-fase8.js        ← npm test — 19 comprobaciones de arcos narrativos
 docs/RPG.md             ← este archivo
 ```
 
@@ -153,6 +159,7 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
 | Mundo | `zonaActual(u)`, `puedeViajar(u, zona)`, `viajar(u, zona)`, `cazar(u, ref)`, `listaZonas(u)`, `enemigoZona(key)`, `statsEscala(nivel, tipo)`, `recompensas(nivel)` |
 | Portal | `abrirPortal(u, rango)`, `avanzarPortal(u)`, `retirarPortal(u)`, `portalPostCombate(u, result)`, `estadoPortal(u)`, `llavesDisponibles(u)`, `enemigoPortal(p)`, `registrarRanking(chats, jid, usuario, pisos)`, `rankingGrupo(chats, jid)` |
+| Arcos | `arcoActual(u)`, `iniciarCapitulo(u)`, `listarArcos(u)`, `arcoPostCombate(u, result)`, `ARCS` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
 | Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, `ZONAS`, `ZONA_INICIAL`, `ESCALADO`, ... (ver `lib/rpg/index.js`) |
 
@@ -321,11 +328,33 @@ Todo el contenido vive en `data/world.js` (DATA pura):
   piso y botín, derrota cobra el 50%, huida/limite cierran; si un combate
   expira sin resultado, el piso se re-sortea con `#avanzar`.
 
+## Arcos narrativos (FASE 8)
+
+- **`data/arcs.js`**: 4 arcos × 8 capítulos, todo en DATA:
+  1. *Aldea Sakura Rota* — tutorial y primer encuentro con el rival.
+  2. *Torneo de las Cuatro Lunas* — eliminatorias PvE contra rivales y combate final.
+  3. *Cumbres del Trueno* — dragones, samuráis y tormentas.
+  4. *Abismo Eclipse* — el vacío y los demonios que lo habitan.
+- **Cada capítulo** tiene 3 a 5 líneas de diálogo, un combate o una prueba,
+  una recompensa (oro/EXP/objeto/título) y termina con
+  "Próximo episodio: (título)". Los capítulos tienen requisitos de nivel y
+  se desbloquean secuencialmente; al completar un arco se desbloquea el
+  siguiente.
+- **`#arco`**: muestra el arco y capítulo actual con su diálogo.
+- **`#arco avanzar`**: comienza el capítulo actual. Si es combate, inicia el
+  motor (`#atk`/`#hab`/`#def`) y, al vencer, cierra el capítulo (recompensa +
+  "Próximo episodio"). Si es prueba, la resuelve al instante (stat o azar).
+- **`#arco listar`**: muestra progreso de los 4 arcos (completado / actual /
+  bloqueado).
+- El estado vive en `u.rpg.arco = { id, capitulo }` (persistido; sin
+  `globalThis`). El hook `arcoPostCombate` en `formatearCombate` cierra el
+  capítulo tras una victoria en combate de arco.
+
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33+27+13+28+30+32 = 163 comprobaciones (FASE 2-7)
+npm test                              # 33+27+13+28+30+32+19 = 201 comprobaciones (FASE 2-8)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -339,9 +368,12 @@ En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
 `#viajar` (lista zonas) → `#cazar` + `#atk`/`#hab 1`/`#def` para subir →
 `#cazar jefe` para el jefe de zona → `#portal E` (gasta 1 llave) →
 `#avanzar` (pisos: combate/evento/tesoro/santuario) → `#retirarse` (conserva
-el botín) → `#portal ranking` → `#examen` en nivel 10 → `#evolucionar` en
-nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
+el botín) → `#portal ranking` → `#arco` (ver capítulo actual) →
+`#arco avanzar` (jugar el capítulo) → `#examen` en nivel 10 →
+`#evolucionar` en nivel 15 → `#evolucionar mayor` en 35 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).
+- **FASE 9:** equipo real (rarezas con ARMAS_RAREZA). **FASE 10:** `heredaPct`
+  de shikigami. **FASE 11:** dominio de armas. **FASE 12:** economía y
+  anti-abuso. **FASE 13:** comandos y compatibilidad (aliases). Etc.
