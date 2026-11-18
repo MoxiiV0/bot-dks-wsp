@@ -107,23 +107,26 @@ check('pasivaDe: efecto base y efecto mayor (kensei)', () => {
 });
 check('pasiva Kensei: +DEF bajo 30% de HP reduce el daño recibido', () => {
   const orig = Math.random;
-  Math.random = () => 0; // determinista
+  Math.random = () => 0.5; // determinista: sin críticos ni cargas de IA
   const correr = (hpPct) => {
     const u = nuevo();
     u.rpg.clase = 'kensei';
-    const s = rpg.getStats(u);
-    u.rpg.hp = hpPct === 1 ? s.hp : Math.max(2, Math.floor(s.hp * hpPct));
+    rpg.getStats(u);
     rpg.startCombat(u, 'dragon'); // atk 35: el daño no se satura en DEF
-    u.rpg.combate.enemyHp = 999999; // sin victoria en el turno 1
-    const hpAntes = u.rpg.combate.hpJugador;
+    const c = u.rpg.combate;
+    c.enemyHp = 999999; // sin victoria en el turno 1
+    // HP controlado para medir solo la reducción de DEF (sin muerte accidental)
+    c.hpMaxJugador = 1000;
+    c.hpJugador = hpPct === 1 ? 1000 : 200; // 20% < umbral 30% de la pasiva
+    const hpAntes = c.hpJugador;
     rpg.combatTurn(u, 'atacar');
-    return hpAntes - u.rpg.combate.hpJugador; // daño recibido
+    return hpAntes - c.hpJugador; // daño recibido
   };
   try {
     const danoFull = correr(1);
     const danoBajo = correr(0.2);
     assert.ok(danoBajo > 0, 'no recibió daño (test inválido)');
-    // DEF 10 -> 13 bajo el umbral: recibe 3 menos de daño con el mismo ataque
+    // DEF base -> +25% bajo el umbral: recibe menos daño con el mismo ataque
     assert.ok(danoBajo < danoFull, `bajo 30% HP no redujo daño: ${danoBajo} vs ${danoFull}`);
   } finally {
     Math.random = orig;
@@ -131,7 +134,7 @@ check('pasiva Kensei: +DEF bajo 30% de HP reduce el daño recibido', () => {
 });
 check('pasiva Médium: roba vida al atacar (texto + curación)', () => {
   const orig = Math.random;
-  Math.random = () => 0;
+  Math.random = () => 0; // el jabali telegrafia (no ataca) y el golpe es crítico
   try {
     const u = nuevo();
     u.rpg.clase = 'medium_yurei';
@@ -139,12 +142,14 @@ check('pasiva Médium: roba vida al atacar (texto + curación)', () => {
     rpg.getStats(u);
     u.rpg.hp = 10; // muy dañada: hay margen para curar
     rpg.startCombat(u, 'jabali');
-    u.rpg.combate.enemyHp = 999999;
-    const hpAntes = u.rpg.combate.hpJugador;
+    const c = u.rpg.combate;
+    c.enemyHp = 999999;
+    c.hpJugador = 10;
+    const hpAntes = c.hpJugador;
     const res = rpg.combatTurn(u, 'atacar');
     assert.ok(res && !res.terminado, 'combate terminó antes de medir');
     assert.ok(res.resultado.includes('Robaste'), 'sin texto de robo de vida');
-    assert.ok(u.rpg.combate.hpJugador > hpAntes, `no curó: ${hpAntes} -> ${u.rpg.combate.hpJugador}`);
+    assert.ok(c.hpJugador > hpAntes, `no curó: ${hpAntes} -> ${c.hpJugador}`);
   } finally {
     Math.random = orig;
   }

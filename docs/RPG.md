@@ -1,8 +1,9 @@
 # Arquitectura del RPG (rework anime)
 
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
-(progresión y stats) + FASE 4 (clases anime) completas**. Las fases siguientes
-(5-16) irán rellenando los placeholders señalados.
+(progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
+unificado) completas**. Las fases siguientes (6-16) irán rellenando los
+placeholders señalados.
 
 ## Estructura
 
@@ -17,17 +18,23 @@ lib/rpg/
                           (nv35) + pasivas (pasivaDe con efecto/efectoMayor),
                           crec{hp,ki,atk,def}, kiBase, velBase, getGrowth/kiBaseDe/
                           velBaseDe (las ramas heredan de la base)
-    skills.js           ← SKILLS_V2 + KITS_POR_CLASE (kits FASE 5, DATA pura),
+    skills.js           ← SKILLS_V2 + KITS_POR_CLASE (kits FASE 5, DATA pura) +
+                          SKILLS_ALIAS (legacy → v2 para #hab),
                           SKILLS, COMBINACIONES_SKILLS, HABILIDADES_POR_NIVEL,
                           HABILIDADES_ESPECIALES (legado re-claveado a clases FASE 4)
-    enemies.js          ← ENEMIES, BOSSSES
+    enemies.js          ← ENEMIES, BOSSSES (FASE 5: def/vel/arquetipo/elemento;
+                          los jefes usan arquetipo 'jefe')
     zones.js            ← EVENTOS_MAZMORRA, MISSIONS, GUILD_RANKS
-    items.js            ← WEAPONS, HOUSES, CHESTS, WEAPON_CLASSES, MANA,
-                          ENTRENAMIENTO (puntos/atributos/reinicio), DESCANSO, REGEN
-    ranks.js            ← RANGOS (E..S + nivel de examen), EXAMENES (jefes de prueba)
+    items.js            ← WEAPONS, HOUSES, CHESTS (+objProb), OBJETOS_COMBATE
+                          (FASE 5: pocion_hp/pocion_ki/elixir/antidoto/talisman),
+                          WEAPON_CLASSES, MANA, ENTRENAMIENTO, DESCANSO, REGEN
+    ranks.js            ← RANGOS (E..S + nivel de examen), EXAMENES (jefes de
+                          prueba con hp/atk/def/vel — balance FASE 5)
+    battle.js           ← FASE 5: BATALLA (fórmula, crítico, defensa, telegrafía,
+                          Despertar, derrota, huida, límite), ELEMENTOS, ARQUETIPOS
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
-    statuses.js         ← STATUSES (FASE 5, placeholder)
+    statuses.js         ← STATUSES (FASE 5: 8 estados con duración/pila/DOT/textos)
     migrations.js       ← CLASS_MAP (FASE 4), ARMAS_RAREZA (FASE 9) — puro DATA
   core/                 ← lógica en funciones puras cuando sea posible
     narrate.js          ← rand, pick, money, classLabel, weaponLabel, barra (formato WhatsApp)
@@ -39,11 +46,16 @@ lib/rpg/
                           descansar, títulos, evolucionarClase (2 ramas + 'mayor'),
                           habilidades, misiones
     ranks.js            ← getRango, examenActual, ascenderRango (rangos de Cazador)
-    effects.js          ← useSkill, combinarSkills
-    ai.js               ← ataqueEnemigo (FASE 5: arquetipos + fases de jefe)
-    combat.js           ← startCombat, combatTurn (HP persistente, exámenes, tipo de
-                          resultado, pasivas kensei/médium FASE 4, doma shikigami)
-    loot.js             ← openChest, generarEventoMazmorra
+    effects.js          ← FASE 5: kitDe/resolveHabilidad (#hab: número/id/alias,
+                          nivel/Ki/cooldown/ougi) + useSkill/combinarSkills (legado)
+    ai.js               ← FASE 5: confIANZA, faseActual (70/40/15%), decidirIA
+                          (atacar/cargar/defender por arquetipo)
+    combat.js           ← FASE 5: motor unificado startCombat/combatTurn
+                          (iniciativa VEL, daño por DEF, crítico/esquiva con tope,
+                          elementos, #def, estados, telegrafía, Despertar,
+                          derrota inconsciente, huida, límite, expiración 10 min,
+                          pasivas, doma shikigami, botín de objetos)
+    loot.js             ← openChest (+objProb → OBJETOS_COMBATE), generarEventoMazmorra
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
@@ -52,6 +64,7 @@ tools/
   smoke-fase2.js        ← npm test — 33 comprobaciones de esquema/migración
   smoke-fase3.js        ← npm test — 27 comprobaciones de progresión/stats/rangos
   smoke-fase4.js        ← npm test — 13 comprobaciones de clases/evoluciones/pasivas
+  smoke-fase5.js        ← npm test — 28 comprobaciones del motor de combate
 docs/RPG.md             ← este archivo
 ```
 
@@ -114,11 +127,11 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 | Stats | `getStats(u)`, `hpMaxDe(u)`, `getStatsCompletos(u)` |
 | Progresión | `addExp(u, n)`, `invertirPunto(u, clave, n)`, `reiniciarPuntos(u)`, `descansar(u)`, `checkTitles(u)`, `unlockTitle(u, key)`, `evolucionarClase(u, rama | 'mayor')` |
 | Rangos | `getRango(u)`, `examenActual(u)`, `ascenderRango(u, key)` |
-| Combate | `startCombat(u, enemyKey)`, `combatTurn(u, action)` → `{resultado, terminado, tipo}`, `getEnemy(key)` |
-| Efectos | `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
+| Combate | `startCombat(u, enemyKey, {enemy})`, `combatTurn(u, action, param)` → `{resultado, terminado, tipo}`, `getEnemy(key)`, `puedeCombatir(u)`, `activarDespertar(u)`, `factorElemental(a, b)`, `aplicarEstado(lista, id, turnos)` |
+| Efectos | `kitDe(u)`, `resolveHabilidad(u, ref, c)`, `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
-| Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `ENEMIES`, `TITLES`, `WEAPONS`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
+| Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
 
 `combatTurn` devuelve `tipo`: `'victoria' | 'derrota' | 'escape' | 'limite' | null`.
 
@@ -172,20 +185,46 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
   espíritus).
 - **Kits FASE 5 en data:** `SKILLS_V2` (24 skills con
   `{id, nombre, clase, nivelReq, costoKi, cooldown, objetivo, efectos, frase,
-  banner}`) + `KITS_POR_CLASE`. `#skill` sigue usando el sistema legado
-  (`SKILLS`, costo en oro) hasta la FASE 5.
+  banner}`) + `KITS_POR_CLASE` + `SKILLS_ALIAS` (nombres legados → kit v2).
+  **Operativos desde la FASE 5:** `#hab <n|id|alias>` los resuelve con
+  `resolveHabilidad` (nivel, Ki, cooldown por turnos absolutos, Ougi solo en
+  modo Despertar). `#skill` es alias de `#hab`; el sistema legado en oro
+  (`useSkill`) solo lo usa `#combinar` hasta la FASE 13.
 - **Doma de bestias:** ahora la hace el Shikigami
   (`baseClassKey(clase) === 'shikigami'`), no el viejo `invocador`.
 
-## Curvas y constantes de combate (FASE 1)
+## Motor de combate unificado (FASE 5)
 
-Viven como constantes nombradas en `core/combat.js`:
+Un solo motor (`core/combat.js`) para caza, portales, jefes, rival y duelos.
+El estado vive en `u.rpg.combate` y todas las constantes en `data/battle.js`:
 
-- `COMBATE_TIMEOUT_MS` = 10 min de inactividad
-- `COMBATE_MAX_TURNOS` = 15
-- `DERROTA_PIERDE_PCT` = 10% del cash en mano
-- `DERROTA_HP_RESTANTE_PCT` = 30% de HP al escapar derrotado
-- `DOMA_BESTIA_PROB` = 20% (shikigami)
+- **Acciones:** `#atk` (alias `#pelear`), `#hab <n>` (alias `#skill`),
+  `#def`, `#obj <id>`, `#huir`, más `#despertar` (instante). El inicio es
+  `#combate <enemigo>`, `#examen` o `#mazmorra-boss <clave>` — todos bloqueados
+  con `puedeCombatir` (inconsciencia).
+- **Iniciativa por VEL** (mayor o igual actúa primero). Daño:
+  `bruto = ATK * mult * rand(0.9–1.1)`, `final = bruto * 100/(100+DEF)`.
+  Crítico 5% + bonos (×1.5), esquiva con tope duro 40%, elementos
+  ×1.25/×0.8 (`ELEMENTOS`: fuego>viento>rayo>agua>fuego; luz>sombra).
+- **`#def`:** −50% de daño y +8 Ki (una vez por golpe recibido); −70% si el
+  golpe enemigo estaba telegrafiado.
+- **Estados** (`data/statuses.js`): sangrado, quemadura, veneno, aturdido,
+  congelado, escudo, furia, marca — con duración, `maxPila`, DOT y textos.
+- **IA** (`core/ai.js`): arquetipos agresivo/defensivo/errático/jefe; los
+  jefes (y guardianes de examen) tienen fases al 70/40/15% de HP con cambio
+  de patrón y telegrafían sus cargas (×3) un turno antes.
+- **Despertar:** medidor 0–100 (+5 al golpear, +15 en crítico, +8 al recibir
+  un golpe fuerte ≥12% del HP máx). `#despertar` da 3 turnos (+30% ATK/VEL,
+  skills sin Ki, acceso a Ougi) y deja 1 turno de cansancio.
+- **Derrota:** −10% del oro en mano, `inconscienteHasta` = 2 min, reaparece
+  con 30% de HP. **Huida** por VEL (15–90%). **Límite** 15 turnos (los jefes
+  además cobran 20%). **Expiración** por timestamp a los 10 min (sin timers).
+- **Pasivas cableadas:** kensei (DEF/ATK bajo umbral), onmyōji (cadena
+  fuego→viento→rayo→agua +20%), hayate (crítico +12%/+0.3), shinobi (esquiva
+  10% + golpe tras esquivar), médium (robo de vida 10%/18%). Falta `heredaPct`
+  de shikigami (invocación, FASE 10).
+- **Objetos:** `#obj` consume `OBJETOS_COMBATE` del `r.inventario` (botín 15%
+  al vencer y `objProb` en cofres).
 
 La curva de EXP es `expToNext(L) = ceil(40 * L^1.65)` con máximo nivel 60
 (`core/curve.js`); el daño del jugador usa `stats.atk` (base + crecimiento +
@@ -195,7 +234,7 @@ equipo + puntos) desde la FASE 3.
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33 + 27 + 13 comprobaciones (FASE 2, 3 y 4)
+npm test                              # 33 + 27 + 13 + 28 comprobaciones (FASE 2-5)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -205,14 +244,14 @@ npm run sim -- --all 200               # matriz completa
 ```
 
 En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
-(barras HP/Ki, VEL, puntos) → `#entrenar atk 3` → `#pelear` para subir →
-`#examen` en nivel 10 → `#evolucionar` en nivel 15 (elige rama) →
-`#evolucionar mayor` en 35 → `#descansar`.
+(barras HP/Ki, VEL, puntos, medidor de Despertar) → `#entrenar atk 3` →
+`#combate jabali` + `#atk`/`#hab 1`/`#def` para subir → `#examen` en nivel 10
+→ `#evolucionar` en nivel 15 (elige rama) → `#evolucionar mayor` en 35 →
+`#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 5:** IA con arquetipos/fases, estados (`statuses.js`), combate unificado,
-  Despertar, `inconscienteHasta`, skills con costo de Ki (`#hab` usa `SKILLS_V2`),
-  pasivas de Onmyōji/Hayate/Shinobi/Shikigami.
+- **FASE 6:** zonas y enemigos con escalado por nivel (`#cazar`, `#viajar`);
+  hoy `ENEMIES` es data fija de prueba.
 - **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
 - **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).

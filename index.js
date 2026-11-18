@@ -621,7 +621,7 @@ const formatTemplate = (template, vars) => {
 const helpCategories = {
   casino: ['work', 'slut', 'crime', 'daily', 'rob', 'pay', 'bal', 'baltop', 'deposit', 'withdraw', 'give', 'take', 'bj', 'blackjack', 'pedir', 'plantarme', 'doblar', 'ruleta', 'rt', 'reset-economy', 'tragamonedas', 'medida', 'match', '8ball'],
   mazmorra: ['mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss'],
-  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen'],
+  rpg: ['clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'pelear', 'pelear-boss', 'estado', 'dungeon-start', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'entrenar', 'reiniciar', 'descansar', 'examen'],
   group: ['tagall', 'tag', 'tagadmin', 'antilink', 'welcome', 'goodbye', 'setwelcome', 'setgoodbye', 'testwelcome', 'texts', 'lobby', 'setform', 'testlobby', 'seguir', 'bienvenido', 'expulsar'],
   admin: ['perm', 'promote', 'demote', 'setup', 'unlock', 'lock', 'resetdaily'],
   utility: ['help', 'info', 'ping', 'stk'],
@@ -642,6 +642,79 @@ const OWNER_ONLY = ['give', 'reset-economy'];
 const HARD_RESTRICTED = ['give', 'take', 'resetdaily', 'ecolog', 'ecobackup', 'restrict'];
 const isRestricted = (cmd) =>
   HARD_RESTRICTED.includes(cmd) || (settings.restrictedCommands || []).includes(cmd);
+
+// --- FASE 5: helpers del motor de combate unificado ---------------------------
+// Formatea el resultado de rpg.combatTurn con barras y hints de acción.
+const formatearCombate = (result, u, titulo = 'Combate') => {
+  let txt = `⚔️ *${titulo}*\n${result.resultado}`;
+  const c = u.rpg.combate;
+  if (!result.terminado && c) {
+    txt += `\n👹 ${c.enemy.nombre}: ${rpg.barra(c.enemyHp, c.enemyMaxHp)} ${c.enemyHp}/${c.enemyMaxHp}`;
+    txt += `\n❤️ Tú: ${rpg.barra(c.hpJugador, c.hpMaxJugador)} ${c.hpJugador}/${c.hpMaxJugador} | 🌀 Ki ${u.rpg.ki || 0}`;
+    txt += `\nUsá #atk, #hab <n>, #def, #obj <id> o #huir.`;
+    if ((u.rpg.despertar || 0) >= rpg.BATALLA.despertar.max) {
+      txt += `\n🌟 ¡Medidor de Despertar lleno! Activá tu poder con #despertar.`;
+    }
+  } else if (result.terminado && result.tipo === 'victoria') {
+    txt += '\n🏆 Combate terminado.';
+  }
+  return txt;
+};
+
+// Ejecuta una acción del motor (atk/hab/def/obj/huir y sus aliases legados).
+const accionCombate = (accion, titulo) => async (ctx) => {
+  const u = econUser(getSenderId(ctx));
+  rpg.ensureRPG(u);
+  if (!u.rpg.combate) {
+    return 'No estás en un combate. Usá #combate <enemigo>, #examen o #mazmorra-boss <clave> para iniciar.';
+  }
+  const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+  const result = rpg.combatTurn(u, accion, args[0]);
+  if (!result) {
+    u.rpg.combate = null;
+    markEconDirty();
+    return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
+  }
+  markEconDirty();
+  return formatearCombate(result, u, titulo);
+};
+
+// Ejecuta #hab: lista el kit sin argumento, o lanza la habilidad en combate.
+const ejecutarHab = async (ctx) => {
+  const u = econUser(getSenderId(ctx));
+  rpg.ensureRPG(u);
+  const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+  const ref = args[0] ? args[0].toLowerCase() : '';
+
+  if (!u.rpg.combate) {
+    return 'No estás en un combate. Usá #combate <enemigo>, #examen o #mazmorra-boss <clave> para iniciar.';
+  }
+  const kit = rpg.kitDe(u);
+  if (!kit || !kit.length) return 'Tu clase no tiene habilidades. Elegí una con #clase.';
+
+  if (!ref) {
+    const c = u.rpg.combate;
+    let txt = `🎯 *Kit de ${rpg.classLabel(u.rpg.clase)}* — 🌀 Ki ${u.rpg.ki || 0}\n\n`;
+    kit.forEach((s, i) => {
+      const cd = c.cooldowns && c.cooldowns[s.id] > c.turnos ? ` ⏳${c.cooldowns[s.id] - c.turnos}` : '';
+      const sinNivel = (u.rpg.nivel || 1) < s.nivelReq ? ` 🔒nv${s.nivelReq}` : '';
+      const sinKi = c.despertarTurnos <= 0 && (u.rpg.ki || 0) < s.costoKi ? ' ⚠️Ki' : '';
+      const ougi = s.banner ? ' 🌟Ougi' : '';
+      txt += `${i + 1}. *${s.nombre}* — ${s.costoKi} Ki, cd ${s.cooldown}${cd}${sinNivel}${sinKi}${ougi}\n`;
+    });
+    txt += '\nUsá #hab <número> para lanzarla (los Ougi necesitan #despertar).';
+    return txt;
+  }
+
+  const result = rpg.combatTurn(u, 'habilidad', ref);
+  if (!result) {
+    u.rpg.combate = null;
+    markEconDirty();
+    return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
+  }
+  markEconDirty();
+  return formatearCombate(result, u, 'Habilidad');
+};
 
 const commands = {
   help: {
@@ -1690,13 +1763,10 @@ const commands = {
   'mazmorra-boss': {
     desc: ' Enfrenta a un jefe de la mazmorra. Uso: #mazmorra-boss <clave>',
     execute: async (ctx) => {
-      if (!globalThis._mazmorraBoss) globalThis._mazmorraBoss = new Map();
       const me = getSenderId(ctx);
-      if (globalThis._mazmorraBoss.has(me)) {
-        return 'Ya estás en un combate contra un jefe. Usá #pelear-boss para atacar.';
-      }
       const u = econUser(me);
       rpg.ensureRPG(u);
+      if (u.rpg.combate) return 'Ya estás en un combate. Terminálo con #atk antes de enfrentar a otro jefe.';
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const clave = args[0] ? args[0].toLowerCase() : '';
 
@@ -1709,149 +1779,60 @@ const commands = {
         return `Necesitas nivel ${bossData.dificultad} para enfrentar a *${bossData.nombre}*. Tu nivel: ${u.rpg.nivel}.`;
       }
 
-      globalThis._mazmorraBoss.set(me, {
-        hp: bossData.hp,
-        maxHp: bossData.hp,
-        atk: bossData.atk,
-        nombre: bossData.nombre,
-        turnos: 0,
-        recompensa: bossData.oro,
-        exp: bossData.exp,
-        clave,
-      });
+      const bloqueo = rpg.puedeCombatir(u);
+      if (bloqueo.error) return `⚠️ ${bloqueo.error}`;
 
+      const enemy = rpg.startCombat(u, clave);
       markEconDirty();
 
-      return ` 🏰 *Mazmorra DKS - Jefe Apareció!*\n\n *Enemigo:* ${bossData.nombre}\n *HP:* ${bossData.hp}/${bossData.hp}\n *ATK:* ${bossData.atk}\n *Recompensa:* ${money(bossData.oro)} | ${bossData.exp} EXP\n\n ¡Un poderoso jefe bloquea tu camino!\n Usá #pelear-boss para atacar.`;
+      return ` 🏰 *Mazmorra DKS - Jefe Apareció!*\n\n *Enemigo:* ${enemy.nombre}\n *HP:* ${enemy.hp}/${enemy.hp}\n *ATK:* ${enemy.atk}\n *Recompensa:* ${money(bossData.oro)} | ${bossData.exp} EXP\n\n ¡Un poderoso jefe bloquea tu camino!\n Usá #atk para atacar, #def para defenderte de sus cargas.`;
     },
   },
 
   'pelear-boss': {
-    desc: ' Ataca al jefe de la mazmorra en combate actual.',
-    execute: async (ctx) => {
-      if (!globalThis._mazmorraBoss) return 'No hay combate de jefe activo.';
-      const me = getSenderId(ctx);
-      const boss = globalThis._mazmorraBoss.get(me);
-      if (!boss) return 'No estás en un combate contra el jefe. Usá #mazmorra-boss <clave> para iniciar.';
+    desc: ' Ataca al jefe en el combate actual (alias de #atk).',
+    execute: accionCombate('atacar', 'Combate contra el jefe'),
+  },
 
-      const u = econUser(me);
-      rpg.ensureRPG(u);
-      const clase = rpg.getClass(u.rpg.clase) || { atkBase: 10, defBase: 5 };
-      const arma = rpg.WEAPONS[u.rpg.arma] || { atk: 0 };
-
-      boss.turnos += 1;
-
-      // Daño del jugador
-      const dmgJugador = Math.max(1, clase.atkBase + arma.atk + Math.floor(Math.random() * 6) - 2);
-      boss.hp = Math.max(0, boss.hp - dmgJugador);
-
-      let texto = `⚔️ *Combate contra ${boss.nombre}*\n`;
-      texto += `Atacaste e infligiste *${dmgJugador}* de daño.\n`;
-      texto += `HP del jefe: ${boss.hp}/${boss.maxHp}\n`;
-
-      if (boss.hp <= 0) {
-        // Victoria
-        u.cash += boss.recompensa;
-        if (!u.rpg.stats) u.rpg.stats = { kills: 0, pisos: 0, muertes: 0, duelos: 0 };
-        u.rpg.stats.kills = (u.rpg.stats.kills || 0) + 1;
-        u.rpg.statsEnemigosDerrotados = u.rpg.stats.kills;
-        const subida = rpg.addExp(u, boss.exp);
-        const nuevos = rpg.checkTitles(u);
-        globalThis._mazmorraBoss.delete(me);
-        markEconDirty();
-        writeAuditLog('mazmorra-boss', me, me, boss.recompensa, ctx.jid);
-        texto += `\n💀 *¡Derrotaste al jefe!*\n💰 Ganaste ${money(boss.recompensa)}\n⭐ Ganaste ${boss.exp} EXP`;
-        if (subida) texto += `\n${subida}`;
-        if (nuevos.length) texto += `\n🏆 ¡Título desbloqueado: ${nuevos.join(', ')}!`;
-        texto += `\n🏆 ¡Puedes continuar en la mazmorra!`;
-        return texto;
-      }
-
-      // El jefe contraataca
-      const dmgBoss = Math.max(1, boss.atk + Math.floor(Math.random() * 6) - 3);
-      const defensa = clase.defBase || 0;
-      const dmgFinal = Math.max(0, dmgBoss - defensa);
-
-      texto += `👹 ${boss.nombre} te contraataca e inflige *${dmgFinal}* de daño.\n`;
-      texto += `Turnos: ${boss.turnos}\n`;
-
-      if (boss.turnos >= 15) {
-        const penalidad = Math.floor(u.cash * 0.2);
-        u.cash = Math.max(0, u.cash - penalidad);
-        globalThis._mazmorraBoss.delete(me);
-        markEconDirty();
-        texto += `\n⏰ El jefe te venció tras ${boss.turnos} turnos.\n💸 Perdiste ${money(penalidad)} en la huida.`;
-        return texto;
-      }
-
-      markEconDirty();
-      texto += `\nUsá #pelear-boss para seguir atacando.`;
-      return texto;
-    },
+  hab: {
+    desc: ' Usa una habilidad de tu kit. Uso: #hab <número|id>',
+    execute: ejecutarHab,
   },
 
   skill: {
-    desc: ' Usa una habilidad de tu clase. Uso: #skill <nombre>',
+    desc: ' Usa una habilidad de tu kit (alias de #hab). Uso: #skill <número|id>',
+    execute: ejecutarHab,
+  },
+
+  atk: {
+    desc: ' Ataca en el combate actual (alias: #pelear).',
+    execute: accionCombate('atacar'),
+  },
+
+  def: {
+    desc: ' Defiende: −50% de daño recibido y +8 Ki (−70% contra cargas telegrafiadas).',
+    execute: accionCombate('defender'),
+  },
+
+  obj: {
+    desc: ' Usa un objeto de combate. Uso: #obj <pocion_hp|pocion_ki|elixir|antidoto|talisman>',
+    execute: accionCombate('objeto'),
+  },
+
+  huir: {
+    desc: ' Intenta huir del combate (depende de tu VEL).',
+    execute: accionCombate('huir'),
+  },
+
+  despertar: {
+    desc: ' Activa tu Despertar (medidor 100/100): 3 turnos de poder y luego 1 de cansancio.',
     execute: async (ctx) => {
-      const me = getSenderId(ctx);
-      const u = econUser(me);
+      const u = econUser(getSenderId(ctx));
       rpg.ensureRPG(u);
-
-      if (!u.rpg.clase) {
-        return 'No tienes una clase seleccionada. Usá #clase <kensei|onmyoji|hayate|shinobi>.';
-      }
-
-      // Skills por clase base (las evoluciones heredan las de su clase base)
-      const baseKey = rpg.baseClassKey(u.rpg.clase);
-      const claseSkills = rpg.SKILLS[baseKey] || {};
-      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
-      const skillKey = args[0] ? args[0].toLowerCase() : '';
-
-      if (!skillKey) {
-        let txt = `🎯 *Habilidades de ${rpg.classLabel(u.rpg.clase)}*\n\n`;
-        for (const [key, s] of Object.entries(claseSkills)) {
-          txt += `• *${s.nombre}* - ${s.descripcion}\n   Costo: ${money(s.costo)}\n`;
-        }
-        txt += `\nUsá #skill <nombre> para usar una (se aplica en tu próximo ataque de #pelear).`;
-        return txt;
-      }
-
-      const skill = claseSkills[skillKey];
-      if (!skill) {
-        return `Habilidad no encontrada. Disponibles: ${Object.keys(claseSkills).join(', ') || 'ninguna'}.`;
-      }
-
-      const resultado = rpg.useSkill(u, skillKey);
-      if (resultado.error) return resultado.error;
-
-      // Guardar efecto pendiente para que combatTurn lo aplique
-      u.rpg.skillPendiente = skill;
-
+      const res = rpg.activarDespertar(u);
+      if (res.error) return `⚠️ ${res.error}`;
       markEconDirty();
-      writeAuditLog('skill', me, skillKey, resultado.costo, ctx.jid);
-
-      let txt = `✨ Usaste *${skill.nombre}*!\n${skill.descripcion}\nCosto: ${money(resultado.costo)}\n`;
-
-      if (skill.multiplicador) {
-        txt += `🔥 Multiplicador de daño: x${skill.multiplicador} en tu próximo ataque.`;
-      }
-      if (skill.reduccion) {
-        txt += `🛡️ Reducción de daño: ${Math.round(skill.reduccion * 100)}% en el próximo turno enemigo.`;
-      }
-      if (skill.curacion) {
-        txt += `❤️ Te curas ${skill.curacion} puntos de vida.`;
-      }
-      if (skill.evadir) {
-        txt += `🌀 ${Math.round(skill.evadir * 100)}% de probabilidad de esquivar el próximo ataque.`;
-      }
-      if (skill.roba_oro) {
-        txt += `💰 Robas oro al enemigo en tu próximo ataque.`;
-      }
-      if (skill.bloquear) {
-        txt += `🫥 Bloqueas todo el daño del próximo turno enemigo.`;
-      }
-
-      return txt;
+      return res.mensaje;
     },
   },
 
@@ -1982,15 +1963,17 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       rpg.ensureRPG(u);
-      if (u.rpg.combate) return 'Ya estás en combate. Terminalo con #pelear antes de rendir el examen.';
+      if (u.rpg.combate) return 'Ya estás en combate. Terminalo con #atk antes de rendir el examen.';
       const info = rpg.examenActual(u);
       if (!info.siguiente) return `🏆 Ya tenés el rango máximo: *${info.rangoActual.nombre}*.`;
       if (!info.puede) {
         return `📋 Rango actual: *${info.rangoActual.nombre}*\nPara ascender a *${info.siguiente.nombre}* necesitás nivel ${info.requisito} (tu nivel: ${u.rpg.nivel}).`;
       }
+      const bloqueo = rpg.puedeCombatir(u);
+      if (bloqueo.error) return `⚠️ ${bloqueo.error}`;
       const enemy = rpg.startCombat(u, info.examenKey);
       markEconDirty();
-      return `📋 *Examen de ascenso a ${info.siguiente.nombre}*\nJefe de prueba: *${enemy.nombre}* (HP ${enemy.hp} | ATK ${enemy.atk})\nUsá #pelear para luchar. Si lo vencés, ascendís de rango.`;
+      return `📋 *Examen de ascenso a ${info.siguiente.nombre}*\nJefe de prueba: *${enemy.nombre}* (HP ${enemy.hp} | ATK ${enemy.atk})\nUsá #atk para luchar, #hab <n> para habilidades y #def ante sus cargas. Si lo vencés, ascendís de rango.`;
     },
   },
 
@@ -2707,43 +2690,23 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
-      if (u.rpg.combate) return 'Ya estás en un combate. Usá #pelear para atacar.';
+      if (u.rpg.combate) return 'Ya estás en un combate. Usá #atk para atacar.';
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const clave = args[0] ? args[0].toLowerCase() : '';
       if (!rpg.ENEMIES[clave]) {
         return `Enemigos disponibles: ${Object.keys(rpg.ENEMIES).join(', ')}`;
       }
+      const bloqueo = rpg.puedeCombatir(u);
+      if (bloqueo.error) return `⚠️ ${bloqueo.error}`;
       const enemy = rpg.startCombat(u, clave);
       markEconDirty();
-      return `⚔️ *Combate iniciado contra ${enemy.nombre}*\nHP enemigo: ${enemy.hp}/${enemy.hp}\nUsá #pelear para atacar.`;
+      return `⚔️ *Combate iniciado contra ${enemy.nombre}*\nHP enemigo: ${enemy.hp}/${enemy.hp}\nUsá #atk para atacar, #hab <n> para una habilidad, #def para defenderte.`;
     },
   },
 
   pelear: {
-    desc: ' Ataca en el combate actual. Uso: #pelear',
-    execute: async (ctx) => {
-      const me = getSenderId(ctx);
-      const u = econUser(me);
-      rpg.ensureRPG(u);
-      if (!u.rpg.combate) return 'No estás en un combate. Usá #combate <enemigo> para iniciar.';
-      const result = rpg.combatTurn(u, 'atacar');
-      if (!result) {
-        u.rpg.combate = null;
-        markEconDirty();
-        return 'El combate ya no es válido. Volvé a empezar con #combate <enemigo>.';
-      }
-      markEconDirty();
-      const c = u.rpg.combate;
-      let txt = `⚔️ *Combate*\n${result.resultado}`;
-      if (!result.terminado && c) {
-        txt += `\n👹 Enemigo: ${rpg.barra(c.enemyHp, c.enemyMaxHp)} ${c.enemyHp}/${c.enemyMaxHp}`;
-        txt += `\nUsá #pelear para seguir, #skill <nombre> para una habilidad.`;
-      }
-      if (result.terminado) {
-        txt += `\n🏆 Combate terminado.`;
-      }
-      return txt;
-    },
+    desc: ' Ataca en el combate actual (alias de #atk).',
+    execute: accionCombate('atacar'),
   },
 
   estado: {
@@ -2764,6 +2727,11 @@ const commands = {
       txt += `⚔️ ATK: *${s.atk}* | 🛡️ DEF: *${s.def}* | 💨 VEL: *${s.vel}*\n`;
       txt += `Arma: *${arma}*\nCasa: *${casa}*\nGremio: *${gremio}*\nRango gremio: *${rank.nombre}* | 🎖️ Cazador: *${rangoCazador.nombre}*\n`;
       txt += `🎯 Puntos de atributo: *${s.puntos}* (#entrenar)\nOro RPG: ${money(u.rpg.oro || 0)}`;
+      txt += `\n🌟 Despertar: ${rpg.barra(u.rpg.despertar || 0, rpg.BATALLA.despertar.max)} ${u.rpg.despertar || 0}/${rpg.BATALLA.despertar.max}`;
+      if (u.rpg.inconscienteHasta && Date.now() < u.rpg.inconscienteHasta) {
+        const seg = Math.ceil((u.rpg.inconscienteHasta - Date.now()) / 1000);
+        txt += `\n😵 Inconsciente: despiertas en ${seg}s.`;
+      }
       if (u.rpg.nombrePersonalizado) txt += `\nNombre: *${u.rpg.nombrePersonalizado}*`;
       return txt;
     },
@@ -3368,7 +3336,7 @@ const processCommand = async (ctx) => {
 
   const chatAdminCommands = ['setup', 'unlock', 'lock', 'lobby', 'setform', 'setmain'];
   const adminGroupCommands = ['bienvenido', 'expulsar', 'setmain', 'seguir', 'perm', 'promote', 'demote'];
-  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
+  const publicCommands = ['help', 'info', 'ping', 'medida', 'match', '8ball', 'ruleta', 'blackjack', 'pedir', 'plantarme', 'doblar', 'mazmorra', 'avanzar', 'retirarse', 'mazmorra-boss', 'pelear-boss', 'clase', 'armas', 'herrero', 'pescar', 'minar', 'gremio', 'rango', 'npc', 'nombre', 'casa', 'contratar', 'aprendiz', 'misiones', 'mision', 'combate', 'pelear', 'atk', 'hab', 'def', 'obj', 'huir', 'despertar', 'estado', 'dungeon-start', 'reset-economy', 'tragamonedas', 'cofre', 'bosses', 'skill', 'combinar', 'stats', 'evolucionar', 'habilidades', 'desbloquear', 'domar', 'bestias', 'especial', 'invocar', 'usar-especial', 'activar-mazmorra', 'titulos', 'equipar-titulo', 'mis-titulos', 'testlobby', 'work', 'slut', 'crime', 'bal', 'baltop', 'deposit', 'withdraw', 'daily', 'rob', 'pay', 'entrenar', 'reiniciar', 'descansar', 'examen'];
 
   if (!chatAdminCommands.includes(resolvedCommand) && !isChatAllowed(ctx)) return;
 
