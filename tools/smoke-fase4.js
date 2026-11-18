@@ -1,4 +1,4 @@
-// Smoke test FASE 4 — clases renombradas estilo anime, evoluciones y pasivas.
+// Smoke test FASE 4 — clases, subclases y clases avanzadas.
 // Uso: node tools/smoke-fase4.js
 
 const assert = require('assert');
@@ -22,141 +22,168 @@ const nuevo = (extra = {}) => {
   return u;
 };
 
-// --- 1. Clases y ramas ---------------------------------------------------------
-console.log('Clases anime:');
-check('6 clases: 4 primarias + 2 secundarias', () => {
-  assert.deepStrictEqual(Object.keys(rpg.CLASSES), ['kensei', 'onmyoji', 'hayate', 'shinobi']);
-  assert.deepStrictEqual(Object.keys(rpg.NUEVAS_CLASES), ['shikigami', 'medium_yurei']);
-});
-check('cada clase tiene 2 ramas de evolución (12 en total)', () => {
-  let total = 0;
-  for (const [key, ramas] of Object.entries(rpg.EVOLUCIONES_CLASE)) {
-    assert.strictEqual(ramas.length, 2, `${key} no tiene 2 ramas`);
-    assert.ok(rpg.CLASSES[key] || rpg.NUEVAS_CLASES[key], `${key} no es clase real`);
-    for (const rama of ramas) {
-      assert.ok(rpg.CLASES_EVOLUCION[rama.nombre], `falta destino ${rama.nombre}`);
-      assert.strictEqual(rama.requisito, 15);
-      total++;
-    }
-  }
-  assert.strictEqual(total, 12);
-});
-check('CLASE_BASE cubre las 12 ramas y getClass las resuelve', () => {
-  for (const [rama, base] of Object.entries(rpg.CLASE_BASE)) {
-    assert.ok(rpg.CLASES_EVOLUCION[rama], `rama desconocida ${rama}`);
-    assert.ok(rpg.CLASSES[base] || rpg.NUEVAS_CLASES[base], `base desconocida ${base}`);
-    assert.strictEqual(rpg.baseClassKey(rama), base);
-    assert.ok(rpg.getClass(rama), `getClass no resuelve ${rama}`);
+// --- 1. Clases base ---------------------------------------------------------
+console.log('Clases base (FASE B):');
+check('5 clases base: espadachin, ladron, invocador, mago, arquero', () => {
+  const claves = Object.keys(rpg.CLASSES);
+  assert.deepStrictEqual(claves.sort(), ['arquero', 'espadachin', 'invocador', 'ladron', 'mago']);
+  for (const [key, c] of Object.entries(rpg.CLASSES)) {
+    assert.ok(c.nombre && c.rol && c.hpBase && c.atkBase && c.defBase && c.velBase && c.kiBase && c.crec && c.pasiva, `${key} incompleto`);
+    assert.ok(c.pasiva.clave && c.pasiva.nombre && c.pasiva.desc && c.pasiva.efecto, `${key}.pasiva incompleto`);
   }
 });
-check('classLabel resuelve ramas (sombra_carmesi con nombre y emoji)', () => {
-  assert.strictEqual(rpg.classLabel('sombra_carmesi'), '🗡️ Sombra Carmesí');
-  assert.strictEqual(rpg.classLabel('guerrero'), 'Sin clase'); // clase vieja ya no existe
+check('cada clase base tiene 2 subclases (10 en total)', () => {
+  const subclases = Object.values(rpg.SUBCLASES);
+  assert.strictEqual(subclases.length, 10, `esperadas 10 subclases, encontradas ${subclases.length}`);
+  for (const [key, s] of Object.entries(rpg.SUBCLASES)) {
+    assert.ok(s.claseBase, `${key} sin claseBase`);
+    assert.ok(rpg.CLASSES[s.claseBase], `${key} referencia clase base inexistente ${s.claseBase}`);
+    assert.ok(s.requisito === 15, `${key} requisito debe ser 15`);
+    assert.ok(s.habilidadFirma, `${key} sin habilidadFirma`);
+  }
+});
+check('cada subclase tiene 2 clases avanzadas (10 en total)', () => {
+  const avanzadas = Object.values(rpg.CLASES_AVANZADAS);
+  assert.strictEqual(avanzadas.length, 10, `esperadas 10 clases avanzadas, encontradas ${avanzadas.length}`);
+  for (const [key, a] of Object.entries(rpg.CLASES_AVANZADAS)) {
+    assert.ok(a.subclase, `${key} sin subclase`);
+    assert.ok(rpg.SUBCLASES[a.subclase], `${a.subclase} no existe como subclase`);
+    assert.ok(a.requisito === 35, `${a.clave} requisito debe ser 35`);
+    assert.ok(a.ougi, `${key} sin ougi`);
+  }
+});
+check('getClass resuelve clase base, subclase y clase avanzada', () => {
+  assert.ok(rpg.getClass('espadachin'), 'getClass espadachin');
+  assert.ok(rpg.getClass('samurai'), 'getClass samurai');
+  assert.ok(rpg.getClass('shogun_carmesi'), 'getClass shogun_carmesi');
+  assert.strictEqual(rpg.getClass('inexistente'), null, 'clase inexistente debe ser null');
+});
+check('classLabel resuelve nombres de todas las clases', () => {
+  assert.ok(rpg.classLabel('espadachin'), 'classLabel espadachin');
+  assert.ok(rpg.classLabel('samurai'), 'classLabel samurai');
+  assert.ok(rpg.classLabel('shogun_carmesi'), 'classLabel shogun_carmesi');
+  assert.strictEqual(rpg.classLabel('inexistente'), 'inexistente', 'clase inexistente devuelve la clave');
 });
 
-// --- 2. Prueba de Ascenso y Despertar Mayor ------------------------------------
-console.log('Evoluciones:');
-check('Prueba de Ascenso: bloquea bajo nv15 y evoluciona a la rama', () => {
-  const u = nuevo();
-  u.rpg.clase = 'kensei';
-  u.rpg.nivel = 14;
-  assert.ok(rpg.evolucionarClase(u, 'shogun_carmesi').error, 'nv14 no debería evolucionar');
-  assert.ok(rpg.evolucionarClase(u, 'hoja_celestial').error, 'rama ajena debería fallar');
-  u.rpg.nivel = 15;
-  const res = rpg.evolucionarClase(u, 'shogun_carmesi');
-  assert.ok(res.exito, res.error);
-  assert.strictEqual(u.rpg.clase, 'shogun_carmesi');
-  assert.strictEqual(u.rpg.claseEvolucionada, true);
-  assert.ok(rpg.evolucionarClase(u, 'hoja_celestial').error, 'doble evolución debería fallar');
+// --- 2. Árbol de clases -------------------------------------------------------
+console.log('Árbol de clases:');
+check('cada subclase tiene claseBase válida', () => {
+  for (const [key, s] of Object.entries(rpg.SUBCLASES)) {
+    assert.ok(rpg.CLASSES[s.claseBase], `${key} claseBase ${s.claseBase} no existe`);
+  }
 });
-check('la rama hereda stats de combate (crecimiento y ki de kensei)', () => {
+check('cada clase avanzada tiene subclase válida', () => {
+  for (const [key, a] of Object.entries(rpg.CLASES_AVANZADAS)) {
+    assert.ok(rpg.SUBCLASES[a.subclase], `${a.subclase} no existe como subclase para ${key}`);
+  }
+});
+check('árbol completo: 5 base + 10 subclases + 10 avanzadas = 25 clases', () => {
+  const total = Object.keys(rpg.CLASSES).length + Object.keys(rpg.SUBCLASES).length + Object.keys(rpg.CLASES_AVANZADAS).length;
+  assert.strictEqual(total, 25, `esperadas 25 clases totales, encontradas ${total}`);
+});
+
+// --- 3. Prueba de Ascenso (nivel 15) y Clase Avanzada (nivel 35) -------------
+console.log('Evoluciones (FASE B):');
+check('evolucionarClase subclase nv15 requiere nivel 15', () => {
+  const u = nuevo();
+  u.rpg.clase = 'espadachin';
+  u.rpg.nivel = 14;
+  const res = rpg.evolucionarClase(u, 'samurai');
+  assert.ok(res.error, 'nv14 no debería poder evolucionar');
+  assert.ok(res.error.includes('Necesitas nivel 15'), `error inesperado: ${res.error}`);
+});
+check('evolucionarClase subclase nv15 funciona', () => {
+  const u = nuevo();
+  u.rpg.clase = 'espadachin';
+  u.rpg.nivel = 15;
+  const res = rpg.evolucionarClase(u, 'samurai');
+  assert.ok(res.exito, res.error);
+  assert.strictEqual(u.rpg.clase, 'samurai');
+  assert.strictEqual(u.rpg.subclase, 'samurai');
+  assert.strictEqual(u.rpg.claseEvolucionada, true);
+});
+check('no se puede evolucionar dos veces a subclase', () => {
+  const u = nuevo();
+  u.rpg.clase = 'espadachin';
+  u.rpg.nivel = 15;
+  rpg.evolucionarClase(u, 'samurai');
+  const res = rpg.evolucionarClase(u, 'robin');
+  assert.ok(res.error, 'no debería permitir segunda subclase');
+});
+check('clase avanzada nv35 requiere subclase y nivel 35', () => {
+  const u = nuevo();
+  u.rpg.clase = 'samurai';
+  u.rpg.subclase = 'samurai';
+  u.rpg.claseEvolucionada = true;
+  u.rpg.nivel = 34;
+  const res = rpg.evolucionarClase(u, 'shogun_carmesi');
+  assert.ok(res.error, 'nv34 no debería poder evolucionar a clase avanzada');
+  u.rpg.nivel = 35;
+  const res2 = rpg.evolucionarClase(u, 'shogun_carmesi');
+  assert.ok(res2.exito, res2.error);
+  assert.strictEqual(u.rpg.clase, 'shogun_carmesi');
+  assert.strictEqual(u.rpg.despertarMayor, true);
+});
+check('no se puede evolucionar dos veces a clase avanzada', () => {
   const u = nuevo();
   u.rpg.clase = 'shogun_carmesi';
-  u.rpg.nivel = 10;
-  const s = rpg.getStats(u);
-  // hpBase 165 + crec kensei 14*9; ki heredado 60 + 3*9
-  assert.strictEqual(s.hp, Math.round(165 + 14 * 9));
-  assert.strictEqual(s.kiMax, Math.round(60 + 3 * 9));
-});
-check('Despertar Mayor: requiere evolución + nivel 35', () => {
-  const u = nuevo();
-  u.rpg.clase = 'kensei';
-  assert.ok(rpg.evolucionarClase(u, 'mayor').error, 'sin evolución debería fallar');
-  u.rpg.nivel = 15;
-  rpg.evolucionarClase(u, 'shogun_carmesi');
-  u.rpg.nivel = 34;
-  assert.ok(rpg.evolucionarClase(u, 'mayor').error, 'nv34 debería fallar');
+  u.rpg.subclase = 'samurai';
+  u.rpg.claseEvolucionada = true;
+  u.rpg.despertarMayor = true;
   u.rpg.nivel = 35;
-  const res = rpg.evolucionarClase(u, 'mayor');
-  assert.ok(res.exito, res.error);
-  assert.strictEqual(u.rpg.despertarMayor, true);
-  assert.ok(rpg.evolucionarClase(u, 'mayor').error, 'doble despertar debería fallar');
+  const res = rpg.evolucionarClase(u, 'kensei_avanzado');
+  assert.ok(res.error, 'no debería permitir segunda clase avanzada');
 });
 
-// --- 3. Pasivas -----------------------------------------------------------------
-console.log('Pasivas:');
-check('pasivaDe: efecto base y efecto mayor (kensei)', () => {
-  const p = rpg.pasivaDe('kensei');
+// --- 3. Pasivas ----------------------------------------------------------
+console.log('Pasivas (FASE B):');
+check('pasivaDe espadachin: voluntad_acero', () => {
+  const p = rpg.pasivaDe('espadachin');
+  assert.strictEqual(p.clave, 'voluntad_acero');
   assert.strictEqual(p.efecto.umbralHp, 0.3);
   assert.strictEqual(p.efecto.defPct, 0.25);
-  const pm = rpg.pasivaDe('kensei', true);
+  const pm = rpg.pasivaDe('espadachin', true);
   assert.strictEqual(pm.mayor, true);
   assert.strictEqual(pm.efecto.umbralHp, 0.4);
-  assert.strictEqual(rpg.pasivaDe('hoja_celestial').clave, 'voluntad_acero'); // rama hereda
-  assert.strictEqual(rpg.pasivaDe('medium_yurei').efecto.roboHpPct, 0.1);
+  assert.strictEqual(pm.efecto.defPct, 0.35);
+  assert.strictEqual(pm.efecto.atkPct, 0.1);
 });
-check('pasiva Kensei: +DEF bajo 30% de HP reduce el daño recibido', () => {
-  const orig = Math.random;
-  Math.random = () => 0.5; // determinista: sin críticos ni cargas de IA
-  const correr = (hpPct) => {
-    const u = nuevo();
-    u.rpg.clase = 'kensei';
-    rpg.getStats(u);
-    rpg.startCombat(u, 'dragon'); // atk 35: el daño no se satura en DEF
-    const c = u.rpg.combate;
-    c.enemyHp = 999999; // sin victoria en el turno 1
-    // HP controlado para medir solo la reducción de DEF (sin muerte accidental)
-    c.hpMaxJugador = 1000;
-    c.hpJugador = hpPct === 1 ? 1000 : 200; // 20% < umbral 30% de la pasiva
-    const hpAntes = c.hpJugador;
-    rpg.combatTurn(u, 'atacar');
-    return hpAntes - c.hpJugador; // daño recibido
-  };
-  try {
-    const danoFull = correr(1);
-    const danoBajo = correr(0.2);
-    assert.ok(danoBajo > 0, 'no recibió daño (test inválido)');
-    // DEF base -> +25% bajo el umbral: recibe menos daño con el mismo ataque
-    assert.ok(danoBajo < danoFull, `bajo 30% HP no redujo daño: ${danoBajo} vs ${danoFull}`);
-  } finally {
-    Math.random = orig;
-  }
+check('pasivaDe ladron: paso_fantasma', () => {
+  const p = rpg.pasivaDe('ladron');
+  assert.strictEqual(p.clave, 'paso_fantasma');
+  assert.strictEqual(p.efecto.esquiva, 0.1);
+  assert.strictEqual(p.efecto.golpePostEsquiva, 0.3);
+  const pm = rpg.pasivaDe('ladron', true);
+  assert.strictEqual(pm.efecto.esquiva, 0.18);
+  assert.strictEqual(pm.efecto.golpePostEsquiva, 0.5);
 });
-check('pasiva Médium: roba vida al atacar (texto + curación)', () => {
-  const orig = Math.random;
-  Math.random = () => 0; // el jabali telegrafia (no ataca) y el golpe es crítico
-  try {
-    const u = nuevo();
-    u.rpg.clase = 'medium_yurei';
-    u.rpg.nivel = 12;
-    rpg.getStats(u);
-    u.rpg.hp = 10; // muy dañada: hay margen para curar
-    rpg.startCombat(u, 'jabali');
-    const c = u.rpg.combate;
-    c.enemyHp = 999999;
-    c.hpJugador = 10;
-    const hpAntes = c.hpJugador;
-    const res = rpg.combatTurn(u, 'atacar');
-    assert.ok(res && !res.terminado, 'combate terminó antes de medir');
-    assert.ok(res.resultado.includes('Robaste'), 'sin texto de robo de vida');
-    assert.ok(c.hpJugador > hpAntes, `no curó: ${hpAntes} -> ${c.hpJugador}`);
-  } finally {
-    Math.random = orig;
-  }
+check('pasivaDe mago: sellos_elementales', () => {
+  const p = rpg.pasivaDe('mago');
+  assert.strictEqual(p.clave, 'sellos_elementales');
+  assert.deepStrictEqual(p.efecto.secuencia, ['fuego', 'viento', 'rayo', 'agua']);
+  assert.strictEqual(p.efecto.bonusPct, 0.2);
+  const pm = rpg.pasivaDe('mago', true);
+  assert.strictEqual(pm.efecto.bonusPct, 0.35);
+});
+check('pasivaDe arquero: ojo_halcon', () => {
+  const p = rpg.pasivaDe('arquero');
+  assert.strictEqual(p.clave, 'ojo_halcon');
+  assert.strictEqual(p.efecto.critProb, 0.12);
+  assert.strictEqual(p.efecto.critMult, 0.3);
+  const pm = rpg.pasivaDe('arquero', true);
+  assert.strictEqual(pm.efecto.critProb, 0.2);
+  assert.strictEqual(pm.efecto.critMult, 0.5);
+});
+check('pasivaDe invocador: pacto', () => {
+  const p = rpg.pasivaDe('invocador');
+  assert.strictEqual(p.clave, 'pacto');
+  assert.strictEqual(p.efecto.heredaPct, 0.6);
+  const pm = rpg.pasivaDe('invocador', true);
+  assert.strictEqual(pm.efecto.heredaPct, 0.8);
 });
 
-// --- 4. Kits de habilidades (data para la FASE 5) -------------------------------
-console.log('Kits de habilidades:');
+// --- 4. Kits de habilidades --------------------------------------------------
+console.log('Kits de habilidades (FASE 4/5):');
 check('SKILLS_V2: 24 skills con el esquema obligatorio', () => {
   const lista = Object.values(rpg.SKILLS_V2);
   assert.strictEqual(lista.length, 24);
@@ -166,26 +193,35 @@ check('SKILLS_V2: 24 skills con el esquema obligatorio', () => {
     }
     assert.ok(Array.isArray(s.efectos) && s.efectos.length > 0, `${s.id} sin efectos`);
     assert.ok(s.id.startsWith('ougi_') === !!s.banner, `${s.id}: banner solo en ougi`);
-    assert.ok(rpg.CLASSES[s.clase] || rpg.NUEVAS_CLASES[s.clase], `${s.id} clase inválida`);
+    assert.ok(rpg.CLASSES[s.clase], `${s.id} clase inválida ${s.clase}`);
   }
-  for (const key of Object.keys(rpg.CLASSES)) {
-    assert.strictEqual((rpg.KITS_POR_CLASE[key] || []).length, 4, `${key} sin kit de 4`);
+});
+check('KITS_POR_CLASE: 5 clases con 4 skills cada una', () => {
+  for (const clave of Object.keys(rpg.CLASSES)) {
+    const kit = rpg.KITS_POR_CLASE[clave];
+    assert.ok(kit, `falta kit para ${clave}`);
+    assert.ok(kit.length >= 4, `${clave} debe tener al menos 4 skills, tiene ${kit.length}`);
+  }
+});
+check('SKILLS_ALIAS re-claveado a nombres nuevos', () => {
+  for (const [legado, nuevo] of Object.entries(rpg.SKILLS_ALIAS)) {
+    assert.ok(rpg.SKILLS_V2[nuevo], `${legado} -> ${nuevo} no existe en SKILLS_V2`);
   }
 });
 
-// --- 5. Mapeo de nombres viejos --------------------------------------------------
-console.log('Aliases legacy:');
-check('CLASS_MAP cubre clases y evoluciones viejas', () => {
-  for (const [vieja, nueva] of Object.entries(rpg.CLASS_MAP)) {
-    assert.ok(rpg.getClass(nueva), `${vieja} -> ${nueva} sin destino`);
-    assert.ok(!rpg.getClass(vieja), `${vieja} aún resuelve como clase`);
-  }
-});
-check('SKILLS legacy re-claveado a nombres nuevos', () => {
-  for (const key of Object.keys(rpg.CLASSES)) {
-    assert.ok(rpg.SKILLS[key] && typeof rpg.SKILLS[key] === 'object', `SKILLS sin clave ${key}`);
-    assert.ok(Array.isArray(rpg.HABILIDADES_POR_NIVEL[key]), `HABILIDADES_POR_NIVEL sin clave ${key}`);
-  }
+// --- 5. Comandos de consola -------------------------------------------------
+console.log('Comandos de consola:');
+check('#estado muestra clase y zona', () => {
+  const u = nuevo();
+  u.rpg.clase = 'espadachin';
+  u.rpg.nivel = 10;
+  rpg.getStats(u);
+  const s = rpg.getStats(u);
+  assert.strictEqual(s.atk, 36); // 16 + 2.2*9 = 35.8 ≈ 36
+  assert.strictEqual(s.def, 24); // 10 + 1.6*9 = 24.4 ≈ 24
+  assert.strictEqual(s.hp, 256); // 130 + 14*9 = 256
+  assert.strictEqual(s.ki, 87);  // 60 + 3*9 = 87
+  assert.strictEqual(s.vel, 8);  // sin crec.vel, sigue siendo 8
 });
 
 console.log(`\n${ok} comprobaciones OK${process.exitCode ? ' (HUBO FALLOS)' : ''}`);

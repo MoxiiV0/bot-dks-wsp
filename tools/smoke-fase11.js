@@ -89,7 +89,8 @@ check('dueloEstado muestra estado', () => {
   rpg.dueloIniciar(iniciador, u, 5000);
   rpg.dueloAceptar(u);
   assert.strictEqual(u.rpg.duelo.estado, 'activo');
-  assert.strictEqual(u.rpg.duelo.oponente, iniciador.id);
+  assert.strictEqual(u.rpg.duelo.oponente, u.id);
+  assert.strictEqual(u.rpg.duelo.iniciador, iniciador.id);
 });
 check('dueloRendirse termina con derrota', () => {
   const u = nuevo();

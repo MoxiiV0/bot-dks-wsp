@@ -679,7 +679,9 @@ const ejecutarPortal = async (ctx) => {
     return txt || '🏆 Todavía no hay récords semanales en este chat. Abrí un portal con #portal <rango> y anotá tus pisos.';
   }
   if (!sub) return rpg.estadoPortal(u);
-
+  if (!u.rpg.clase) {
+    return '⚠️ Primero elegí tu clase con #clase antes de abrir un portal. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+  }
   const res = rpg.abrirPortal(u, args[0]);
   if (res.error) return `⚠️ ${res.error}`;
   markEconDirty();
@@ -1688,8 +1690,45 @@ const commands = {
   },
 
   mazmorra: {
-    desc: ' Abre una incursión por pisos (alias de #portal). Uso: #mazmorra <rango>',
-    execute: ejecutarPortal,
+    desc: ' Mazmorras por pisos. Uso: #mazmorra | #mazmorra <id> | #mazmorra continuar',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const sub = args[0] ? args[0].toLowerCase() : '';
+
+      if (sub === 'continuar') {
+        const clave = u.rpg.mazmorra_activa;
+        if (!clave) return '⚠️ No tenés una mazmorra activa para continuar.';
+        const res = rpg.avanzarMazmorra(u, clave);
+        if (res.error) return `⚠️ ${res.error}`;
+        markEconDirty();
+        return res.texto;
+      }
+
+      if (!sub) {
+        const lista = rpg.listaMazmorras();
+        let txt = `🏰 *Mazmorras disponibles*\n\n`;
+        for (const m of lista) {
+          const estado = u.rpg.mazmorras && u.rpg.mazmorras[m.clave]
+            ? ` (piso ${u.rpg.mazmorras[m.clave].pisosVencidos})`
+            : '';
+          txt += `• *${m.nombre}* — nv${m.nivelMin}-${m.nivelMax}${estado}\n`;
+        }
+        txt += `\nUsá #mazmorra <id> para entrar o #mazmorra continuar para reanudar.`;
+        return txt;
+      }
+
+      const clave = sub;
+      const def = rpg.obtenerMazmorra(clave);
+      if (!def) return `⚠️ Mazmorra '${clave}' no encontrada. Usá #mazmorra para ver disponibles.`;
+      const res = rpg.abrirMazmorra(u, clave);
+      if (res.error) return `⚠️ ${res.error}`;
+      markEconDirty();
+      u.rpg.mazmorra_activa = clave;
+      return res.texto;
+    },
   },
 
   avanzar: {
@@ -1697,7 +1736,9 @@ const commands = {
     execute: async (ctx) => {
       const u = econUser(getSenderId(ctx));
       rpg.ensureRPG(u);
-      const res = rpg.avanzarPortal(u);
+      const clave = u.rpg.mazmorra_activa;
+      if (!clave) return '⚠️ No tenés una mazmorra activa. Usá #mazmorra <id> para entrar.';
+      const res = rpg.avanzarMazmorra(u, clave);
       if (res.error) return `⚠️ ${res.error}`;
       markEconDirty();
       return res.texto;
@@ -1705,19 +1746,106 @@ const commands = {
   },
 
   retirarse: {
-    desc: ' Sale del portal conservando todo el botín',
+    desc: ' Sale de la mazmorra conservando todo el botín',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
-      const res = rpg.retirarPortal(u);
+      const clave = u.rpg.mazmorra_activa;
+      if (!clave) return '⚠️ No tenés una mazmorra activa.';
+      const res = rpg.retirarMazmorra(u, clave);
       if (res.error) return `⚠️ ${res.error}`;
-      if (res.pisos > 0 && ctx.jid) {
-        rpg.registrarRanking(settings.chats, ctx.jid, { id: me, nombre: ctx.pushName || me }, res.pisos);
-        saveSettings();
-      }
       markEconDirty();
+      u.rpg.mazmorra_activa = null;
       return res.texto;
+    },
+  },
+
+  barrer: {
+    desc: ' Repetir un piso ya superado (simulación de combate que gasta HP/Ki). Uso: #barrer <piso>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const piso = args[0] ? parseInt(args[0], 10) : null;
+      if (!piso || piso < 1) return '⚠️ Uso: #barrer <piso> (número positivo).';
+      // Simulación de piso: gastar HP/Ki y ganar 40% de la EXP normal
+      const s = getStats(u);
+      const hpPerdida = Math.max(1, Math.round(s.hp * 0.10));
+      const kiPerdida = Math.round(s.kiMax * 0.15);
+      u.rpg.hp = Math.max(1, u.rpg.hp - hpPerdida);
+      u.rpg.ki = Math.max(0, u.rpg.ki - kiPerdida);
+      const expGanado = Math.floor(s.exp * 0.4);
+      const subida = addExp(u, expGanado);
+      let txt = `🌀 *Repetición de piso ${piso}*\\n❤️ Perdiste ${hpPerdida} HP (${u.rpg.hp}/${s.hp}).\\n🌀 Perdiste ${kiPerdida} Ki (${u.rpg.ki}/${s.kiMax}).`;
+      if (subida) txt += `\\n${subida}`;
+      txt += '\\nUsá #avanzar para seguir o #retirarse para cobrar.';
+      return txt;
+    },
+  },
+
+  misiones: {
+    desc: ' Misiones diarias (3 tareas). Uso: #misiones',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const hoy = new Date().toISOString().slice(0, 10);
+      u.rpg.misiones = u.rpg.misiones || {};
+      u.rpg.misiones.fecha = u.rpg.misiones.fecha || hoy;
+      // Resetear misiones si es un nuevo día
+      if (u.rpg.misiones.fecha !== hoy) {
+        u.rpg.misiones = { fecha: hoy, tareas: [] };
+      }
+      const tareas = u.rpg.misiones.tareas || [];
+      if (tareas.length === 0) {
+        // Generar 3 misiones nuevas
+        const tipos = ['matar_monstruos', 'superar_pisos', 'derrotar_jefe'];
+        const seleccionadas = [];
+        while (seleccionadas.length < 3 && tipos.length > 0) {
+          const idx = Math.floor(Math.random() * tipos.length);
+          const tipo = tipos.splice(idx, 1)[0];
+          let desc, objetivo;
+          switch (tipo) {
+            case 'matar_monstruos':
+              objetivo = 10;
+              desc = `Matá ${objetivo} monstruos`;
+              break;
+            case 'superar_pisos':
+              objetivo = 15;
+              desc = `Superá ${objetivo} pisos`;
+              break;
+            case 'derrotar_jefe':
+              objetivo = 1;
+              desc = `Derrotá 1 jefe`;
+              break;
+          }
+          seleccionadas.push({ tipo, objetivo, desc });
+        }
+        u.rpg.misiones.tareas = seleccionadas;
+      }
+      let txt = `📋 *Misiones diarias*\\n\\n`;
+      for (const [i, t] of u.rpg.misiones.tareas.entries()) {
+        txt += `${i + 1}. *${t.tipo.replace(/_/g, ' ')}*: ${t.desc}\\n`;
+      }
+      txt += `Usá #completar <tipo> <objetivo> para registrar avance.`;
+      return txt;
+    },
+  },
+
+  completar: {
+    desc: ' Completar un avance de misión diaria. Uso: #completar <tipo> <objetivo>',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      rpg.ensureRPG(u);
+      const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
+      const tipo = args[0] ? args[0].toLowerCase() : '';
+      const objetivo = args[1] ? parseInt(args[1], 10) : 0;
+      if (!tipo || !objetivo) return '⚠️ Uso: #completar <tipo> <objetivo>.';
+      const progreso = registrarAvanceMision(u, tipo, objetivo);
+      return { exito: true, mensaje: progreso.texto, progreso };
     },
   },
 
@@ -2016,26 +2144,45 @@ const commands = {
       if (!u.rpg.clase) return 'No tienes una clase seleccionada. Usá #clase primero.';
 
       if (!nuevaClave) {
-        // Despertar Mayor disponible
-        if (u.rpg.claseEvolucionada && !u.rpg.despertarMayor) {
-          const disp = u.rpg.nivel >= rpg.DESPERTAR_MAYOR.requisito;
-          const marca = disp ? '✅ Disponible ahora' : `🔒 Necesita nivel ${rpg.DESPERTAR_MAYOR.requisito} (tu nivel: ${u.rpg.nivel})`;
-          let txt = `🌟 *Despertar Mayor* — ${marca}\nMejora la pasiva de tu rama actual.\nUsá: #evolucionar mayor\n\n`;
-          const rama = rpg.CLASES_EVOLUCION[u.rpg.clase];
-          if (rama) txt += `Rama actual: *${rama.nombre}*`;
+        // Clase Avanzada (nivel 35) - elegir de las dos opciones de tu subclase
+        if (u.rpg.subclase && !u.rpg.despertarMayor) {
+          const avanzadas = Object.values(rpg.CLASES_AVANZADAS).filter(a => a.subclase === u.rpg.subclase);
+          if (avanzadas.length === 0) return 'Tu subclase no tiene clase avanzada disponible.';
+          let txt = `🔄 *Clase Avanzada* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí tu clase avanzada:\n\n`;
+          for (const av of avanzadas) {
+            const marca = u.rpg.nivel >= av.requisito ? '✅' : `🔒 nv${av.requisito}`;
+            txt += `• ${marca} *${av.nombre}* — ${av.desc}\n`;
+          }
+          txt += `\nUsá: #evolucionar <clave>`;
           return txt;
         }
-        if (u.rpg.despertarMayor) return '🌟 Ya completaste el Despertar Mayor. Tu clase está en su forma máxima.';
+        if (u.rpg.despertarMayor) return '🌟 Ya completaste tu clase avanzada. Tu clase está en su forma máxima.';
 
-        const ramas = rpg.EVOLUCIONES_CLASE[rpg.baseClassKey(u.rpg.clase)] || [];
-        if (ramas.length === 0) return 'Tu clase no tiene Prueba de Ascenso disponible.';
-        let txt = `🔄 *Prueba de Ascenso* — ${rpg.classLabel(u.rpg.clase)} (tu nivel: ${u.rpg.nivel})\nElegí uno de tus dos caminos:\n\n`;
-        for (const rama of ramas) {
-          const destino = rpg.CLASES_EVOLUCION[rama.nombre];
-          const marca = u.rpg.nivel >= rama.requisito ? '✅' : `🔒 nv${rama.requisito}`;
-          txt += `• ${marca} *${destino ? destino.nombre : rama.nombre}* — ${destino ? destino.desc : ''}\n`;
+        // Subclase (nivel 15) - elegir una de las dos ramas de tu clase base
+        if (u.rpg.claseEvolucionada) {
+          if (u.rpg.nivel >= rpg.DESPERTAR_MAYOR.requisito) {
+            const avanzadas = Object.values(rpg.CLASES_AVANZADAS).filter(a => a.subclase === u.rpg.subclase);
+            if (avanzadas.length === 0) return 'Tu subclase no tiene clase avanzada disponible.';
+            let txt = `🔄 *Clase Avanzada* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí tu clase avanzada:\n\n`;
+            for (const av of avanzadas) {
+              const marca = u.rpg.nivel >= av.requisito ? '✅' : `🔒 nv${av.requisito}`;
+              txt += `• ${marca} *${av.nombre}* — ${av.desc}\n`;
+            }
+            txt += `\nUsá: #evolucionar <clave>`;
+            return txt;
+          }
+          return { error: 'Ya completaste tu evolución de clase.' };
         }
-        txt += `\nUsá: #evolucionar <rama>`;
+
+        const base = rpg.baseClassKey(u.rpg.clase);
+        const subclases = Object.values(rpg.SUBCLASES).filter(s => s.claseBase === base);
+        if (subclases.length === 0) return 'Tu clase no tiene subclases disponibles.';
+        let txt = `🔄 *Prueba de Ascenso* — ${rpg.classLabel(u.rpg.clase)} (nivel ${u.rpg.nivel})\nElegí una de tus dos subcases:\n\n`;
+        for (const sub of subclases) {
+          const marca = u.rpg.nivel >= sub.requisito ? '✅' : `🔒 nv${sub.requisito}`;
+          txt += `• ${marca} *${sub.nombre}* — ${sub.desc}\n`;
+        }
+        txt += `\nUsá: #evolucionar <clave>`;
         return txt;
       }
 
@@ -2456,19 +2603,14 @@ const commands = {
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const entrada = args[0] ? args[0].toLowerCase() : '';
       // FASE 4: acepta nombres viejos (guerrero, mago…) como alias de los nuevos
-      const clase = (rpg.CLASS_MAP[entrada] && (rpg.CLASSES[rpg.CLASS_MAP[entrada]] || rpg.NUEVAS_CLASES[rpg.CLASS_MAP[entrada]]))
+      const clase = (rpg.CLASS_MAP[entrada] && rpg.CLASSES[rpg.CLASS_MAP[entrada]])
         ? rpg.CLASS_MAP[entrada]
         : entrada;
-      const claseData = rpg.CLASSES[clase] || rpg.NUEVAS_CLASES[clase];
-      const esSecundaria = !rpg.CLASSES[clase];
+      const claseData = rpg.CLASSES[clase];
       if (!claseData) {
-        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\nDesbloqueadas al nivel 10: ${Object.keys(rpg.NUEVAS_CLASES).join(', ')}\n(También acepta los nombres clásicos: ${Object.keys(rpg.CLASS_MAP).join(', ')})`;
+        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\n(También acepta los nombres clásicos: ${Object.keys(rpg.CLASS_MAP).join(', ')})`;
       }
       if (u.rpg.clase) return `Ya tienes la clase *${rpg.classLabel(u.rpg.clase)}*.`;
-      // Clases secundarias: requieren nivel 10 (misión especial)
-      if (esSecundaria && u.rpg.nivel < 10) {
-        return `🔒 Necesitas nivel 10 para elegir *${rpg.classLabel(clase)}*. Tu nivel: ${u.rpg.nivel}.`;
-      }
       // FASE 4: elegir clase ya NO resetea nivel/exp
       u.rpg.clase = clase;
       markEconDirty();
@@ -2887,6 +3029,9 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
+      if (!u.rpg.clase) {
+        return '⚠️ Primero elegí tu clase con #clase antes de cazar. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+      }
       if (u.rpg.combate) return 'Ya estás en un combate. Usá #atk para atacar.';
       const bloqueo = rpg.puedeCombatir(u);
       if (bloqueo.error) return `⚠️ ${bloqueo.error}`;
@@ -2911,6 +3056,9 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
+      if (!u.rpg.clase) {
+        return '⚠️ Primero elegí tu clase con #clase antes de viajar. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+      }
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const destino = args[0] ? args[0].toLowerCase() : '';
       if (!destino) {
@@ -2990,19 +3138,42 @@ const commands = {
         return 'Ya completaste el tutorial de la mazmorra. Usá #portal E para abrir tu primer portal.';
       }
 
-      // Regalo inicial: espada de hierro + 2000 Coins
+      // Regalo inicial: arma según clase + 2000 Coins (sistema de equipo FASE 9)
       const bonoOro = 2000;
-      u.cash += bonoOro;
-      if (!u.rpg.armas.includes('espada_hierro')) {
-        u.rpg.armas.push('espada_hierro');
+      u.cash = Math.max(0, u.cash + bonoOro);
+
+      const armaPorClase = {
+        kensei: 'arma_katana_Comun',
+        onmyoji: 'arma_tomodesellos_Comun',
+        hayate: 'arma_arcoyumi_Comun',
+        shinobi: 'arma_kodachi_Comun',
+        shikigami: 'arma_talisman_Comun',
+        medium_yurei: 'arma_campanafunebre_Comun',
+      };
+      const claveArma = u.rpg.clase ? armaPorClase[u.rpg.clase] : 'arma_katana_Comun';
+
+      const equipo = rpg.equipoDe(u);
+      if (!equipo.arma) {
+        const res = rpg.equipar(u, 'arma', claveArma);
+        if (res.error) {
+          // Fallback: crear el item directamente si algo falló
+          const item = rpg.crearItem(claveArma, 0);
+          if (item) {
+            equipo.arma = item;
+            u.rpg.arma = item.clave;
+          }
+        } else {
+          u.rpg.arma = res.item.clave;
+        }
       }
-      if (u.rpg.arma === 'nada') {
-        u.rpg.arma = 'espada_hierro';
-      }
+
       u.rpg.tutorialCompletado = true;
       markEconDirty();
 
-      return ` 🏰 *Tutorial de Portales DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${rpg.weaponLabel('espada_hierro')}* (ATK +8).\n\n📖 *Cómo jugar:*\n• Escribí #portal E para abrir una incursión por pisos (gasta 1 llave al día o ${money(rpg.PORTAL.costoOro)} de oro).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir conservando todo el botín.\n• Cuidado: si un monstruo te derrota, pierdes el 50% del botín acumulado.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
+      const armaInfo = rpg.obtenerItem(u.rpg.arma);
+      const armaNombre = armaInfo ? armaInfo.nombre : (u.rpg.arma || 'un arma');
+
+      return ` 🏰 *Tutorial de Portales DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${armaNombre}* equipado.\n\n📖 *Cómo jugar:*\n• Escribí #portal E para abrir una incursión por pisos (entrada gratis, sin llaves ni oro).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir conservando todo el botín.\n• Cuidado: si un monstruo te derrota, pierdes el 50% del botín del bloque actual.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
     },
   },
 
