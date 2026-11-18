@@ -1707,6 +1707,27 @@ const commands = {
         return res.texto;
       }
 
+      // Mapeo de entradas del usuario a keys de ZONAS
+      const mapaMazmorras = {
+        '1': 'sakura',
+        'cuevas_sakra': 'sakura',
+        'cuevas_sakra_rota': 'sakura',
+        '2': 'torii',
+        'bosque_ji': 'torii',
+        'bosque_mil_torii': 'torii',
+        '3': 'luna',
+        'templo_lunar': 'luna',
+        '4': 'cristal',
+        'desierto_cristal': 'cristal',
+        '5': 'trueno',
+        'cumbres_trueno': 'trueno',
+        '6': 'abismo',
+        'abismo_eclipse': 'abismo',
+      };
+
+      // Si el input está en el mapa, usar el key de ZONAS
+      let clave = mapaMazmorras[sub] || sub;
+
       if (!sub) {
         const lista = rpg.listaMazmorras();
         let txt = `🏰 *Mazmorras disponibles*\n\n`;
@@ -1720,7 +1741,6 @@ const commands = {
         return txt;
       }
 
-      const clave = sub;
       const def = rpg.obtenerMazmorra(clave);
       if (!def) return `⚠️ Mazmorra '${clave}' no encontrada. Usá #mazmorra para ver disponibles.`;
       const res = rpg.abrirMazmorra(u, clave);
