@@ -1,12 +1,12 @@
 // Simulador de combate (base para la FASE 15 — balance).
 // Uso:
-//   node tools/simulate.js                      -> guerrero vs jabali x100
+//   node tools/simulate.js                      -> kensei vs jabali x100
 //   node tools/simulate.js <clase> <enemigo> [n]
 //   node tools/simulate.js --all [n]            -> todas las clases vs todos los enemigos
 
 const rpg = require('../lib/rpg');
 
-const CLASES_BASE = ['guerrero', 'mago', 'arquero', 'pícaro'];
+const CLASES_BASE = Object.keys(rpg.CLASSES); // FASE 4: kensei, onmyoji, hayate, shinobi
 
 // Corre n combates limpios y devuelve métricas.
 const simular = (claseKey, enemyKey, n) => {
@@ -58,7 +58,7 @@ const main = () => {
   const n = nums.length ? parseInt(nums[0], 10) : 100;
   const pos = args.filter((a) => !a.startsWith('--') && !/^\d+$/.test(a));
 
-  const clases = all ? CLASES_BASE : [pos[0] || 'guerrero'];
+  const clases = all ? CLASES_BASE : [pos[0] || 'kensei'];
   const enemigos = all ? Object.keys(rpg.ENEMIES) : [pos[1] || 'jabali'];
 
   console.log(`⚔️  Simulación: ${n} combates por pareja\n`);

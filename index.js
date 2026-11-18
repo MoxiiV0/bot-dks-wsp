@@ -1798,11 +1798,11 @@ const commands = {
       rpg.ensureRPG(u);
 
       if (!u.rpg.clase) {
-        return 'No tienes una clase seleccionada. Usá #clase <guerrero|mago|arquero|pícaro>.';
+        return 'No tienes una clase seleccionada. Usá #clase <kensei|onmyoji|hayate|shinobi>.';
       }
 
       // Skills por clase base (las evoluciones heredan las de su clase base)
-      const baseKey = { asesino: 'pícaro', gran_arquero: 'arquero', caballero: 'guerrero', archimago: 'mago' }[u.rpg.clase] || u.rpg.clase;
+      const baseKey = rpg.baseClassKey(u.rpg.clase);
       const claseSkills = rpg.SKILLS[baseKey] || {};
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const skillKey = args[0] ? args[0].toLowerCase() : '';
@@ -1995,7 +1995,7 @@ const commands = {
   },
 
   evolucionar: {
-    desc: ' Evoluciona tu clase a su forma superior. Uso: #evolucionar <clase>',
+    desc: ' Prueba de Ascenso (dos ramas) o Despertar Mayor. Uso: #evolucionar | #evolucionar <rama> | #evolucionar mayor',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
@@ -2003,17 +2003,37 @@ const commands = {
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const nuevaClave = args[0] ? args[0].toLowerCase() : '';
 
+      if (!u.rpg.clase) return 'No tienes una clase seleccionada. Usá #clase primero.';
+
       if (!nuevaClave) {
-        const evo = rpg.EVOLUCIONES_CLASE[u.rpg.clase];
-        if (!evo) return 'Tu clase no tiene evolución disponible.';
-        return `🔄 Evolución disponible:\nDe: ${rpg.classLabel(u.rpg.clase)}\nA: ${rpg.classLabel(evo.nombre)}\nNivel requerido: ${evo.requisito} (tu nivel: ${u.rpg.nivel})\nCosto: Gratis\nUsá: #evolucionar ${evo.nombre}`;
+        // Despertar Mayor disponible
+        if (u.rpg.claseEvolucionada && !u.rpg.despertarMayor) {
+          const disp = u.rpg.nivel >= rpg.DESPERTAR_MAYOR.requisito;
+          const marca = disp ? '✅ Disponible ahora' : `🔒 Necesita nivel ${rpg.DESPERTAR_MAYOR.requisito} (tu nivel: ${u.rpg.nivel})`;
+          let txt = `🌟 *Despertar Mayor* — ${marca}\nMejora la pasiva de tu rama actual.\nUsá: #evolucionar mayor\n\n`;
+          const rama = rpg.CLASES_EVOLUCION[u.rpg.clase];
+          if (rama) txt += `Rama actual: *${rama.nombre}*`;
+          return txt;
+        }
+        if (u.rpg.despertarMayor) return '🌟 Ya completaste el Despertar Mayor. Tu clase está en su forma máxima.';
+
+        const ramas = rpg.EVOLUCIONES_CLASE[rpg.baseClassKey(u.rpg.clase)] || [];
+        if (ramas.length === 0) return 'Tu clase no tiene Prueba de Ascenso disponible.';
+        let txt = `🔄 *Prueba de Ascenso* — ${rpg.classLabel(u.rpg.clase)} (tu nivel: ${u.rpg.nivel})\nElegí uno de tus dos caminos:\n\n`;
+        for (const rama of ramas) {
+          const destino = rpg.CLASES_EVOLUCION[rama.nombre];
+          const marca = u.rpg.nivel >= rama.requisito ? '✅' : `🔒 nv${rama.requisito}`;
+          txt += `• ${marca} *${destino ? destino.nombre : rama.nombre}* — ${destino ? destino.desc : ''}\n`;
+        }
+        txt += `\nUsá: #evolucionar <rama>`;
+        return txt;
       }
 
       const resultado = rpg.evolucionarClase(u, nuevaClave);
       if (resultado.error) return resultado.error;
 
       markEconDirty();
-      return `${resultado.mensaje}\n${rpg.NUEVAS_CLASES[nuevaClave].desc}`;
+      return resultado.mensaje;
     },
   },
 
@@ -2064,8 +2084,8 @@ const commands = {
       const u = econUser(me);
       rpg.ensureRPG(u);
 
-      if (!u.rpg.clase || u.rpg.clase !== 'invocador') {
-        return 'Solo los Invocadores pueden domar bestias. Usá #clase invocador.';
+      if (rpg.baseClassKey(u.rpg.clase) !== 'shikigami') {
+        return 'Solo los Shikigami pueden domar bestias. Usá #clase shikigami (nivel 10).';
       }
 
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
@@ -2252,8 +2272,8 @@ const commands = {
       const u = econUser(me);
       rpg.ensureRPG(u);
 
-      if (!u.rpg.clase || u.rpg.clase !== 'invocador') {
-        return 'Solo los Invocadores pueden invocar bestias.';
+      if (rpg.baseClassKey(u.rpg.clase) !== 'shikigami') {
+        return 'Solo los Shikigami pueden invocar bestias.';
       }
 
       if (!u.rpg.bestiasDomadas || u.rpg.bestiasDomadas.length === 0) {
@@ -2336,26 +2356,29 @@ const commands = {
   },
 
   clase: {
-    desc: ' Elige tu clase de aventurero. Uso: #clase <guerrero|mago|arquero|pícaro|invocador|nigromante>',
+    desc: ' Elige tu clase de aventurero. Uso: #clase <kensei|onmyoji|hayate|shinobi|shikigami|medium_yurei>',
     execute: async (ctx) => {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
-      const clase = args[0] ? args[0].toLowerCase() : '';
+      const entrada = args[0] ? args[0].toLowerCase() : '';
+      // FASE 4: acepta nombres viejos (guerrero, mago…) como alias de los nuevos
+      const clase = (rpg.CLASS_MAP[entrada] && (rpg.CLASSES[rpg.CLASS_MAP[entrada]] || rpg.NUEVAS_CLASES[rpg.CLASS_MAP[entrada]]))
+        ? rpg.CLASS_MAP[entrada]
+        : entrada;
       const claseData = rpg.CLASSES[clase] || rpg.NUEVAS_CLASES[clase];
       const esSecundaria = !rpg.CLASSES[clase];
       if (!claseData) {
-        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\nDesbloqueadas al nivel 10: invocador, nigromante`;
+        return `Clases disponibles: ${Object.keys(rpg.CLASSES).join(', ')}\nDesbloqueadas al nivel 10: ${Object.keys(rpg.NUEVAS_CLASES).join(', ')}\n(También acepta los nombres clásicos: ${Object.keys(rpg.CLASS_MAP).join(', ')})`;
       }
       if (u.rpg.clase) return `Ya tienes la clase *${rpg.classLabel(u.rpg.clase)}*.`;
-      // Clases secundarias: requieren nivel 10
+      // Clases secundarias: requieren nivel 10 (misión especial)
       if (esSecundaria && u.rpg.nivel < 10) {
         return `🔒 Necesitas nivel 10 para elegir *${rpg.classLabel(clase)}*. Tu nivel: ${u.rpg.nivel}.`;
       }
+      // FASE 4: elegir clase ya NO resetea nivel/exp
       u.rpg.clase = clase;
-      u.rpg.nivel = 1;
-      u.rpg.exp = 0;
       markEconDirty();
       return `✅ ¡Eres ahora *${rpg.classLabel(clase)}*! ${claseData.desc}`;
     },

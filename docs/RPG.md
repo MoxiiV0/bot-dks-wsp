@@ -1,8 +1,8 @@
 # Arquitectura del RPG (rework anime)
 
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
-(progresión y stats) completas**. Las fases siguientes (4-16) irán rellenando
-los placeholders señalados.
+(progresión y stats) + FASE 4 (clases anime) completas**. Las fases siguientes
+(5-16) irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -11,9 +11,15 @@ lib/rpg.js              ← fachada legacy: SOLO re-exporta ./rpg/index.js (no t
 lib/rpg/
   index.js              ← compone data/ + core/ y expone la API completa
   data/                 ← TODO el contenido es DATA (cero números mágicos en la lógica)
-    classes.js          ← CLASSES/NUEVAS_CLASES con crec{hp,ki,atk,def}, kiBase, velBase,
-                          getGrowth/kiBaseDe/velBaseDe (las evoluciones heredan de la base)
-    skills.js           ← SKILLS, COMBINACIONES_SKILLS, HABILIDADES_POR_NIVEL, HABILIDADES_ESPECIALES
+    classes.js          ← CLASSES (kensei/onmyoji/hayate/shinobi) + NUEVAS_CLASES
+                          (shikigami/medium_yurei, nv10) + CLASES_EVOLUCION (12 ramas)
+                          + EVOLUCIONES_CLASE (2 ramas por clase, nv15) + DESPERTAR_MAYOR
+                          (nv35) + pasivas (pasivaDe con efecto/efectoMayor),
+                          crec{hp,ki,atk,def}, kiBase, velBase, getGrowth/kiBaseDe/
+                          velBaseDe (las ramas heredan de la base)
+    skills.js           ← SKILLS_V2 + KITS_POR_CLASE (kits FASE 5, DATA pura),
+                          SKILLS, COMBINACIONES_SKILLS, HABILIDADES_POR_NIVEL,
+                          HABILIDADES_ESPECIALES (legado re-claveado a clases FASE 4)
     enemies.js          ← ENEMIES, BOSSSES
     zones.js            ← EVENTOS_MAZMORRA, MISSIONS, GUILD_RANKS
     items.js            ← WEAPONS, HOUSES, CHESTS, WEAPON_CLASSES, MANA,
@@ -30,19 +36,22 @@ lib/rpg/
                           back-pay de puntos (puntosOtorgados, una sola vez)
     stats.js            ← getStats (fórmula FASE 3 + regen por tiempo), hpMaxDe, gremio/casa
     progression.js      ← addExp (puntos + curación 20%), invertirPunto, reiniciarPuntos,
-                          descansar, títulos, evolución, habilidades, misiones
+                          descansar, títulos, evolucionarClase (2 ramas + 'mayor'),
+                          habilidades, misiones
     ranks.js            ← getRango, examenActual, ascenderRango (rangos de Cazador)
     effects.js          ← useSkill, combinarSkills
     ai.js               ← ataqueEnemigo (FASE 5: arquetipos + fases de jefe)
-    combat.js           ← startCombat, combatTurn (HP persistente, exámenes, tipo de resultado)
+    combat.js           ← startCombat, combatTurn (HP persistente, exámenes, tipo de
+                          resultado, pasivas kensei/médium FASE 4, doma shikigami)
     loot.js             ← openChest, generarEventoMazmorra
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
   examen-sim.js         ← node tools/examen-sim.js — balance de exámenes por clase/rango
   cli.js                ← npm run cli — inspección de datos y prueba del lock
-  smoke-fase2.js        ← npm test — 32 comprobaciones de esquema/migración
+  smoke-fase2.js        ← npm test — 33 comprobaciones de esquema/migración
   smoke-fase3.js        ← npm test — 27 comprobaciones de progresión/stats/rangos
+  smoke-fase4.js        ← npm test — 13 comprobaciones de clases/evoluciones/pasivas
 docs/RPG.md             ← este archivo
 ```
 
@@ -89,9 +98,13 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
   espeja v2→v1 en cada `ensureRPG` para los lectores legacy), `exp → curva
   ceil(40*L^1.65)` sin bajar de nivel, `equipo.arma ← arma`, `titulos ←
   titulosDesbloqueados` (misma referencia), `cooldowns === cd` (helper `rpgLeft`).
-- **Renombrado FASE 4/9:** `CLASS_MAP`/`ARMAS_RAREZA` en `data/migrations.js`
-  se aplican de forma perezosa y **solo si el destino ya existe en data/** —
-  hoy es no-op y se activará solo cuando FASE 4 agregue `kensei`, `onmyoji`, etc.
+- **Renombrado FASE 4 (ACTIVO):** `CLASS_MAP` en `data/migrations.js` se aplica
+  de forma perezosa en cada `ensureRPG` y **solo si el destino existe en data/** —
+  hoy ya renombra: `guerrero→kensei`, `mago→onmyoji`, `arquero→hayate`,
+  `pícaro→shinobi`, `invocador→shikigami`, `nigromante→medium_yurei` y las
+  evoluciones viejas (`asesino→sombra_carmesi`, `caballero→shogun_carmesi`,
+  `gran_arquero→francotirador_espectral`, `archimago→archimago_vacio`).
+  `ARMAS_RAREZA` seguirá no-op hasta la FASE 9.
 
 ## API principal (fachada `require('./lib/rpg')`)
 
@@ -99,13 +112,13 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 |------|-----------|
 | Estado | `ensureRPG(u)`, `migrate(u, {dryRun})` |
 | Stats | `getStats(u)`, `hpMaxDe(u)`, `getStatsCompletos(u)` |
-| Progresión | `addExp(u, n)`, `invertirPunto(u, clave, n)`, `reiniciarPuntos(u)`, `descansar(u)`, `checkTitles(u)`, `unlockTitle(u, key)`, `evolucionarClase(u, key)` |
+| Progresión | `addExp(u, n)`, `invertirPunto(u, clave, n)`, `reiniciarPuntos(u)`, `descansar(u)`, `checkTitles(u)`, `unlockTitle(u, key)`, `evolucionarClase(u, rama | 'mayor')` |
 | Rangos | `getRango(u)`, `examenActual(u)`, `ascenderRango(u, key)` |
 | Combate | `startCombat(u, enemyKey)`, `combatTurn(u, action)` → `{resultado, terminado, tipo}`, `getEnemy(key)` |
 | Efectos | `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
-| Datos | `CLASSES`, `ENEMIES`, `SKILLS`, `TITLES`, `WEAPONS`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
+| Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `ENEMIES`, `TITLES`, `WEAPONS`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
 
 `combatTurn` devuelve `tipo`: `'victoria' | 'derrota' | 'escape' | 'limite' | null`.
 
@@ -138,6 +151,32 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
   texto en el resultado del combate). `#rango` muestra rango de Cazador +
   rango de gremio.
 
+## Clases, evoluciones y pasivas (FASE 4)
+
+- **Clases primarias** (desde el inicio): ⚔️ Kensei (bruiser), 🔮 Onmyōji
+  (daño elemental), 🏹 Cazador Hayate (crítico), 🌑 Shinobi (esquiva).
+  **Secundarias** (nivel 10): 🦊 Shikigami (invoca/doma bestias), 👻 Médium
+  Yūrei (maldiciones y robo de vida). `#clase` acepta los nombres viejos como
+  alias vía `CLASS_MAP` y **ya no resetea nivel/exp**.
+- **Prueba de Ascenso** (nivel 15): `EVOLUCIONES_CLASE` da **dos ramas** por
+  clase (12 en total, `CLASES_EVOLUCION`). `#evolucionar` lista las ramas con
+  su disponibilidad; `#evolucionar <rama>` aplica. Las ramas usan stats propias
+  de HP/ATK/DEF y **heredan** crecimiento/ki/VEL/pasiva de su clase base
+  (`CLASE_BASE` + `getGrowth/kiBaseDe/velBaseDe/pasivaDe`).
+- **Despertar Mayor** (nivel 35): `#evolucionar mayor` marca
+  `r.despertarMayor` y `pasivaDe(clave, true)` devuelve `efectoMayor`.
+- **Pasivas** (data con `efecto`/`efectoMayor`): Kensei `voluntad_acero` (+DEF
+  bajo 30% de HP; +ATK con Despertar Mayor), Médium `susurro` (10%/18% del
+  daño en HP) — **ambas ya operan en `combatTurn`**. Onmyōji/Hayate/Shinobi/
+  Shikigami requieren mecánicas de la FASE 5/10 (sellos, críticos, esquiva,
+  espíritus).
+- **Kits FASE 5 en data:** `SKILLS_V2` (24 skills con
+  `{id, nombre, clase, nivelReq, costoKi, cooldown, objetivo, efectos, frase,
+  banner}`) + `KITS_POR_CLASE`. `#skill` sigue usando el sistema legado
+  (`SKILLS`, costo en oro) hasta la FASE 5.
+- **Doma de bestias:** ahora la hace el Shikigami
+  (`baseClassKey(clase) === 'shikigami'`), no el viejo `invocador`.
+
 ## Curvas y constantes de combate (FASE 1)
 
 Viven como constantes nombradas en `core/combat.js`:
@@ -146,7 +185,7 @@ Viven como constantes nombradas en `core/combat.js`:
 - `COMBATE_MAX_TURNOS` = 15
 - `DERROTA_PIERDE_PCT` = 10% del cash en mano
 - `DERROTA_HP_RESTANTE_PCT` = 30% de HP al escapar derrotado
-- `DOMA_BESTIA_PROB` = 20% (invocador)
+- `DOMA_BESTIA_PROB` = 20% (shikigami)
 
 La curva de EXP es `expToNext(L) = ceil(40 * L^1.65)` con máximo nivel 60
 (`core/curve.js`); el daño del jugador usa `stats.atk` (base + crecimiento +
@@ -156,22 +195,24 @@ equipo + puntos) desde la FASE 3.
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 32 + 27 comprobaciones (FASE 2 y 3)
+npm test                              # 33 + 27 + 13 comprobaciones (FASE 2, 3 y 4)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
-node tools/cli.js stats mago
+node tools/cli.js stats kensei
 node tools/cli.js enemies
 node tools/cli.js lock usuario1        # debe imprimir "correcto (serializado): true"
-npm run sim                            # 100 combates: guerrero vs jabali
+npm run sim                            # 100 combates: kensei vs jabali
 npm run sim -- --all 200               # matriz completa
 ```
 
-En WhatsApp: `#clase guerrero` → `#estado` (barras HP/Ki, VEL, puntos) →
-`#entrenar atk 3` → `#pelear` para subir → `#examen` en nivel 10 → `#descansar`.
+En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
+(barras HP/Ki, VEL, puntos) → `#entrenar atk 3` → `#pelear` para subir →
+`#examen` en nivel 10 → `#evolucionar` en nivel 15 (elige rama) →
+`#evolucionar mayor` en 35 → `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 4:** clases renombradas estilo anime (mapeo `CLASS_MAP` ya preparado).
 - **FASE 5:** IA con arquetipos/fases, estados (`statuses.js`), combate unificado,
-  Despertar, `inconscienteHasta`, skills con costo de Ki.
+  Despertar, `inconscienteHasta`, skills con costo de Ki (`#hab` usa `SKILLS_V2`),
+  pasivas de Onmyōji/Hayate/Shinobi/Shikigami.
 - **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
 - **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).

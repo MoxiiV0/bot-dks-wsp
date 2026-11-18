@@ -4,7 +4,7 @@
 const rpg = require('../lib/rpg');
 
 const intentos = parseInt(process.argv[2], 10) || 20;
-const CLASES = ['guerrero', 'mago', 'arquero', 'pícaro'];
+const CLASES = ['kensei', 'onmyoji', 'hayate', 'shinobi']; // FASE 4
 // Arma conservadora para todas las builds
 const ARMA = 'espada_hierro';
 

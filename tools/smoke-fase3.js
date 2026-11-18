@@ -26,29 +26,29 @@ const nuevo = (extra = {}) => {
 
 // --- 1. Fórmula de stats: base + crecimiento*(L-1) + atributos ---------------
 console.log('Fórmula de stats:');
-check('guerrero nv1: hp 120, atk 15, def 8, ki 60, vel 8', () => {
+check('kensei nv1: hp 130, atk 16, def 10, ki 60, vel 8', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   const s = rpg.getStats(u);
-  assert.strictEqual(s.hp, 120);
-  assert.strictEqual(s.atk, 15);
-  assert.strictEqual(s.def, 8);
+  assert.strictEqual(s.hp, 130);
+  assert.strictEqual(s.atk, 16);
+  assert.strictEqual(s.def, 10);
   assert.strictEqual(s.kiMax, 60);
   assert.strictEqual(s.vel, 8);
 });
-check('guerrero nv10: crecimiento x9 (hp 246, atk 35, def 22, ki 87)', () => {
+check('kensei nv10: crecimiento x9 (hp 256, atk 36, def 24, ki 87)', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.nivel = 10;
   const s = rpg.getStats(u);
-  assert.strictEqual(s.hp, Math.round(120 + 14 * 9));
-  assert.strictEqual(s.atk, Math.round(15 + 2.2 * 9));
-  assert.strictEqual(s.def, Math.round(8 + 1.6 * 9));
+  assert.strictEqual(s.hp, Math.round(130 + 14 * 9));
+  assert.strictEqual(s.atk, Math.round(16 + 2.2 * 9));
+  assert.strictEqual(s.def, Math.round(10 + 1.6 * 9));
   assert.strictEqual(s.kiMax, Math.round(60 + 3 * 9));
 });
-check('mago nv1: kiBase 120, vel 9', () => {
+check('onmyoji nv1: kiBase 120, vel 9', () => {
   const u = nuevo();
-  u.rpg.clase = 'mago';
+  u.rpg.clase = 'onmyoji';
   const s = rpg.getStats(u);
   assert.strictEqual(s.kiMax, 120);
   assert.strictEqual(s.vel, 9);
@@ -62,34 +62,34 @@ check('sin clase: ki por defecto 100, vel 5, sin crecimiento', () => {
   const s2 = rpg.getStats(u);
   assert.strictEqual(s2.hp, 0); // sin clase no crece
 });
-check('evolución hereda crecimiento de la base (asesino <- pícaro)', () => {
-  const crec = rpg.getGrowth('asesino');
-  assert.deepStrictEqual(crec, rpg.getGrowth('pícaro'));
+check('evolución hereda crecimiento de la base (sombra_carmesi <- shinobi)', () => {
+  const crec = rpg.getGrowth('sombra_carmesi');
+  assert.deepStrictEqual(crec, rpg.getGrowth('shinobi'));
   const u = nuevo();
-  u.rpg.clase = 'asesino';
+  u.rpg.clase = 'sombra_carmesi';
   u.rpg.nivel = 20;
   const s = rpg.getStats(u);
-  // asesino: hpBase 100 + crec pícaro hp 9 * 19
-  assert.strictEqual(s.hp, Math.round(100 + 9 * 19));
+  // sombra_carmesi: hpBase 105 + crec shinobi hp 9 * 19
+  assert.strictEqual(s.hp, Math.round(105 + 9 * 19));
 });
-check('clases secundarias tienen kiBase/vel propios (invocador 100/11)', () => {
-  assert.strictEqual(rpg.kiBaseDe('invocador'), 100);
-  assert.strictEqual(rpg.velBaseDe('invocador'), 11);
-  assert.strictEqual(rpg.kiBaseDe('nigromante'), 110);
+check('clases secundarias tienen kiBase/vel propios (shikigami 100/11)', () => {
+  assert.strictEqual(rpg.kiBaseDe('shikigami'), 100);
+  assert.strictEqual(rpg.velBaseDe('shikigami'), 11);
+  assert.strictEqual(rpg.kiBaseDe('medium_yurei'), 110);
 });
 
 // --- 2. addExp: puntos por nivel + curación 20% + cap 60 --------------------
 console.log('addExp (FASE 3):');
 check('subir N niveles otorga 2*N puntos', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   const txt = rpg.addExp(u, 2000); // niveles 1 -> 7 aprox
   assert.ok(txt && txt.includes('puntos de atributo'), 'texto sin puntos');
   assert.strictEqual(u.rpg.puntos, (u.rpg.nivel - 1) * 2);
 });
 check('subir cura 20% del máximo', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.hp = 1; // muy dañado
   u.rpg.ki = 0;
   rpg.addExp(u, 40); // un nivel
@@ -100,7 +100,7 @@ check('subir cura 20% del máximo', () => {
 });
 check('tope MAX_LEVEL = 60 sin bucle infinito', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.nivel = 59;
   rpg.addExp(u, 1000000);
   assert.strictEqual(u.rpg.nivel, 60);
@@ -128,14 +128,14 @@ check('usuario nuevo nv1 recibe 0 y queda marcado', () => {
 console.log('Atributos:');
 check('invertirPunto aplica bonus por punto y descuenta', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.puntos = 5;
   const res = rpg.invertirPunto(u, 'atk', 3);
   assert.ok(res.exito, res.error);
   assert.strictEqual(u.rpg.puntos, 2);
   assert.strictEqual(u.rpg.atributos.atk, 3);
   const s = rpg.getStats(u);
-  assert.strictEqual(s.atk, 15 + 3 * 2); // +2 atk por punto
+  assert.strictEqual(s.atk, 16 + 3 * 2); // kensei base 16 + 2 atk por punto
 });
 check('errores: atributo inválido, sin puntos, cantidad no entera', () => {
   const u = nuevo();
@@ -147,7 +147,7 @@ check('errores: atributo inválido, sin puntos, cantidad no entera', () => {
 });
 check('reiniciarPuntos devuelve los puntos y cuesta oro', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.puntos = 4;
   u.rpg.oro = 5000;
   rpg.invertirPunto(u, 'hp', 4);
@@ -171,7 +171,7 @@ check('reiniciar sin oro suficiente falla', () => {
 console.log('Regeneración:');
 check('HP +1%/min y Ki +2%/min al consultar, con resto conservado', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.nivel = 10;
   const s = rpg.getStats(u);
   u.rpg.hp = 100;
@@ -184,7 +184,7 @@ check('HP +1%/min y Ki +2%/min al consultar, con resto conservado', () => {
 });
 check('sin tiempo suficiente no regenera (no pierde minutos)', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   rpg.getStats(u);
   u.rpg.hp = 50;
   const antes = u.rpg.ultimaRegen;
@@ -197,7 +197,7 @@ check('sin tiempo suficiente no regenera (no pierde minutos)', () => {
 console.log('Descanso:');
 check('cura todo, cuesta oro y queda en cooldown', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   rpg.getStats(u);
   u.rpg.hp = 10;
   u.rpg.ki = 0;
@@ -223,7 +223,7 @@ check('no se puede descansar en combate ni sin oro', () => {
 console.log('Rangos de Cazador:');
 check('E -> D requiere nivel 10; S es el tope', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   assert.strictEqual(rpg.getRango(u).key, 'E');
   let info = rpg.examenActual(u);
   assert.strictEqual(info.siguiente.key, 'D');
@@ -236,7 +236,7 @@ check('E -> D requiere nivel 10; S es el tope', () => {
 });
 check('victoria en el examen asciende de rango', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.nivel = 10;
   const info = rpg.examenActual(u);
   const enemy = rpg.startCombat(u, info.examenKey);
@@ -250,7 +250,7 @@ check('victoria en el examen asciende de rango', () => {
 });
 check('derrota en el examen NO asciende y conserva HP a 30%', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   u.rpg.nivel = 10;
   rpg.startCombat(u, 'examen_d');
   u.rpg.combate.hpJugador = 1; // el contraataque lo tumbará
@@ -266,7 +266,7 @@ check('derrota en el examen NO asciende y conserva HP a 30%', () => {
 console.log('HP persistente:');
 check('el combate arranca con el HP actual (no lleno)', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   rpg.getStats(u);
   u.rpg.hp = 40;
   rpg.startCombat(u, 'jabali');
@@ -274,7 +274,7 @@ check('el combate arranca con el HP actual (no lleno)', () => {
 });
 check('victoria persiste el daño sufrido en r.hp', () => {
   const u = nuevo();
-  u.rpg.clase = 'guerrero';
+  u.rpg.clase = 'kensei';
   rpg.getStats(u);
   u.rpg.hp = 100;
   rpg.startCombat(u, 'jabali');
@@ -287,12 +287,12 @@ check('victoria persiste el daño sufrido en r.hp', () => {
 });
 
 // --- 9. Balance aproximado del examen D (informativo) ---------------------------
-console.log('Balance examen D (guerrero nv10):');
+console.log('Balance examen D (kensei nv10):');
 check('winrate >= 50% en 20 intentos', () => {
   let victorias = 0;
   for (let n = 0; n < 20; n++) {
     const u = nuevo();
-    u.rpg.clase = 'guerrero';
+    u.rpg.clase = 'kensei';
     u.rpg.nivel = 10;
     rpg.getStats(u);
     u.rpg.hp = u.rpg.hp; // lleno

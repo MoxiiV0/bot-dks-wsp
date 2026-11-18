@@ -68,10 +68,10 @@ const probarLock = async (id) => {
 
 const main = async () => {
   switch (cmd) {
-    case 'stats': return statsDeClase(arg || 'guerrero');
+    case 'stats': return statsDeClase(arg || 'kensei');
     case 'enemies': return listarEnemigos();
     case 'bosses': return listarJefes();
-    case 'skills': return listarSkills(arg || 'guerrero');
+    case 'skills': return listarSkills(arg || 'kensei');
     case 'titles': return listarTitulos();
     case 'missions': return listarMisiones(arg);
     case 'lock': return probarLock(arg || 'test');

@@ -36,7 +36,7 @@ check('equipo.arma = nada', () => assert.strictEqual(rn.equipo.arma, 'nada'));
 check('titulos === titulosDesbloqueados', () => assert.strictEqual(rn.titulos, rn.titulosDesbloqueados));
 check('cooldowns === cd (helper legacy)', () => assert.strictEqual(rn.cooldowns, rn.cd));
 check('hp llena (0 sin clase -> se llena al tener clase)', () => {
-  nuevo.rpg.clase = 'guerrero';
+  nuevo.rpg.clase = 'kensei';
   const s = rpg.getStats(nuevo);
   assert.strictEqual(nuevo.rpg.hp, s.hp);
 });
@@ -66,8 +66,9 @@ const rl = legacy.rpg;
 check('migrado a v2', () => assert.strictEqual(rl.v, 2));
 check('mana convertido a ki (barra llena, máximo por clase)', () => {
   assert.strictEqual(rl.mana, undefined);
-  // FASE 3: kiMax se computa = kiBase + crecimiento*(nv-1); ki arranca lleno
-  assert.strictEqual(rl.kiMax, 60 + 3 * 11); // guerrero nivel 12
+  // FASE 4: 'guerrero' se renombró a 'kensei' (kiBase 60, crec.ki 3)
+  assert.strictEqual(rl.clase, 'kensei');
+  assert.strictEqual(rl.kiMax, 60 + 3 * 11); // kensei nivel 12
   assert.strictEqual(rl.ki, rl.kiMax);
 });
 check('exp escalada sin bajar de nivel (3.75% de la curva nueva)', () => {
@@ -119,25 +120,32 @@ check('addExp sube con la curva nueva', () => {
 });
 check('MAX_LEVEL = 60', () => assert.strictEqual(rpg.MAX_LEVEL, 60));
 
-// --- 5. Mapeo perezoso FASE 4 ---
-console.log('Mapeo perezoso de clases (simula FASE 4):');
+// --- 5. Mapeo perezoso FASE 4 (activo: los destinos existen en data/) ---
+console.log('Mapeo perezoso de clases (FASE 4):');
 const u4 = { cash: 0, bank: 0 };
 rpg.ensureRPG(u4);
 u4.rpg.clase = 'guerrero';
-check('antes de inyectar kensei: queda guerrero', () => rpg.ensureRPG(u4) && assert.strictEqual(u4.rpg.clase, 'guerrero'));
-rpg.CLASSES.kensei = { nombre: '⚔️ Kensei', hpBase: 130, atkBase: 16, defBase: 10, desc: 'test' };
 rpg.ensureRPG(u4);
-check('tras inyectar kensei: renombra solo', () => assert.strictEqual(u4.rpg.clase, 'kensei'));
+check('guerrero -> kensei (activo)', () => assert.strictEqual(u4.rpg.clase, 'kensei'));
+u4.rpg.clase = 'invocador';
+rpg.ensureRPG(u4);
+check('invocador -> shikigami', () => assert.strictEqual(u4.rpg.clase, 'shikigami'));
+u4.rpg.clase = 'caballero';
+rpg.ensureRPG(u4);
+check('evolución vieja caballero -> shogun_carmesi', () => assert.strictEqual(u4.rpg.clase, 'shogun_carmesi'));
+// Sin destino en data: no rompe ni renombra
+const kenseiTmp = rpg.CLASSES.kensei;
 delete rpg.CLASSES.kensei;
 u4.rpg.clase = 'guerrero';
 rpg.ensureRPG(u4);
 check('sin destino en data: no rompe', () => assert.strictEqual(u4.rpg.clase, 'guerrero'));
+rpg.CLASSES.kensei = kenseiTmp;
 
 // --- 6. Combate escribe stats v2 ---
 console.log('Combate y stats:');
 const uc = { cash: 1000, bank: 0 };
 rpg.ensureRPG(uc);
-uc.rpg.clase = 'guerrero';
+uc.rpg.clase = 'kensei';
 rpg.startCombat(uc, 'jabali');
 let resC = null;
 let i = 0;
