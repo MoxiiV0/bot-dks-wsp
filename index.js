@@ -141,7 +141,7 @@ const markEconDirty = () => {
     }
   }, 200);
 };
-rpg.compañeros.setMarkEconDirty(markEconDirty);
+// rpg.compañeros.setMarkEconDirty(markEconDirty); // Quitado: compañeros no tiene este método
 
 const saveEcon = () => {
   markEconDirty();
@@ -1771,13 +1771,13 @@ const commands = {
       const piso = args[0] ? parseInt(args[0], 10) : null;
       if (!piso || piso < 1) return '⚠️ Uso: #barrer <piso> (número positivo).';
       // Simulación de piso: gastar HP/Ki y ganar 40% de la EXP normal
-      const s = getStats(u);
+      const s = rpg.getStats(u);
       const hpPerdida = Math.max(1, Math.round(s.hp * 0.10));
       const kiPerdida = Math.round(s.kiMax * 0.15);
       u.rpg.hp = Math.max(1, u.rpg.hp - hpPerdida);
       u.rpg.ki = Math.max(0, u.rpg.ki - kiPerdida);
       const expGanado = Math.floor(s.exp * 0.4);
-      const subida = addExp(u, expGanado);
+      const subida = rpg.addExp(u, expGanado);
       let txt = `🌀 *Repetición de piso ${piso}*\\n❤️ Perdiste ${hpPerdida} HP (${u.rpg.hp}/${s.hp}).\\n🌀 Perdiste ${kiPerdida} Ki (${u.rpg.ki}/${s.kiMax}).`;
       if (subida) txt += `\\n${subida}`;
       txt += '\\nUsá #avanzar para seguir o #retirarse para cobrar.';
