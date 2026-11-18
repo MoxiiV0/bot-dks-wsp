@@ -13,6 +13,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
+const VERSION = '0.4'; // Versión del bot RPG Anime
+
 const { imageToSticker } = require('./lib/sticker');
 const { parseFormData, ACK } = require('./lib/lobbyForm');
 const rpg = require('./lib/rpg');
@@ -1707,6 +1709,27 @@ const commands = {
         return res.texto;
       }
 
+      // Mapeo de entradas del usuario a keys de ZONAS
+      const mapaMazmorras = {
+        '1': 'sakura',
+        'cuevas_sakra': 'sakura',
+        'cuevas_sakra_rota': 'sakura',
+        '2': 'torii',
+        'bosque_ji': 'torii',
+        'bosque_mil_torii': 'torii',
+        '3': 'luna',
+        'templo_lunar': 'luna',
+        '4': 'cristal',
+        'desierto_cristal': 'cristal',
+        '5': 'trueno',
+        'cumbres_trueno': 'trueno',
+        '6': 'abismo',
+        'abismo_eclipse': 'abismo',
+      };
+
+      // Si el input está en el mapa, usar el key de ZONAS
+      let clave = mapaMazmorras[sub] || sub;
+
       if (!sub) {
         const lista = rpg.listaMazmorras();
         let txt = `🏰 *Mazmorras disponibles*\n\n`;
@@ -1720,7 +1743,6 @@ const commands = {
         return txt;
       }
 
-      const clave = sub;
       const def = rpg.obtenerMazmorra(clave);
       if (!def) return `⚠️ Mazmorra '${clave}' no encontrada. Usá #mazmorra para ver disponibles.`;
       const res = rpg.abrirMazmorra(u, clave);
@@ -1745,6 +1767,35 @@ const commands = {
     },
   },
 
+  reset: {
+    desc: ' Reinicia completamente tu progreso RPG (nivel 1, sin clase, sin oro).',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      const u = econUser(me);
+      const res = rpg.resetRPG(u);
+      if (res.resetado) return { exito: true, mensaje: res.mensaje };
+      return { error: res.razon || 'No se pudo resetear' };
+    },
+  },
+  resetall: {
+    desc: ' (ADMIN) Reinicia RPG para TODOS los usuarios (todos comienzan de nivel 1).',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      // Verificar si es dueño del bot
+      if (me != config.ownerNumber) return '⚠️ Solo el dueño del bot puede usar este comando.';
+      const econ = require('./economy');
+      const res = migrate.resetAllRPG(econ.users);
+      saveSettings();
+      return { exito: true, mensaje: res.mensaje };
+    },
+  },
+  version: {
+    desc: ' Muestra la versión actual del bot',
+    execute: async (ctx) => {
+      const me = getSenderId(ctx);
+      return { exito: true, mensaje: '🤖 Bot RPG Anime v' + VERSION };
+    },
+  },
   retirarse: {
     desc: ' Sale de la mazmorra conservando todo el botín',
     execute: async (ctx) => {
