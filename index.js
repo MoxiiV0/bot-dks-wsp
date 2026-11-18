@@ -679,7 +679,9 @@ const ejecutarPortal = async (ctx) => {
     return txt || '🏆 Todavía no hay récords semanales en este chat. Abrí un portal con #portal <rango> y anotá tus pisos.';
   }
   if (!sub) return rpg.estadoPortal(u);
-
+  if (!u.rpg.clase) {
+    return '⚠️ Primero elegí tu clase con #clase antes de abrir un portal. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+  }
   const res = rpg.abrirPortal(u, args[0]);
   if (res.error) return `⚠️ ${res.error}`;
   markEconDirty();
@@ -2887,6 +2889,9 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
+      if (!u.rpg.clase) {
+        return '⚠️ Primero elegí tu clase con #clase antes de cazar. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+      }
       if (u.rpg.combate) return 'Ya estás en un combate. Usá #atk para atacar.';
       const bloqueo = rpg.puedeCombatir(u);
       if (bloqueo.error) return `⚠️ ${bloqueo.error}`;
@@ -2911,6 +2916,9 @@ const commands = {
       const me = getSenderId(ctx);
       const u = econUser(me);
       rpg.ensureRPG(u);
+      if (!u.rpg.clase) {
+        return '⚠️ Primero elegí tu clase con #clase antes de viajar. Opciones: kensei, onmyoji, hayate, shinobi, shikigami, medium_yurei.';
+      }
       const args = ctx.text.slice(config.prefix.length).trim().split(/\s+/).slice(1);
       const destino = args[0] ? args[0].toLowerCase() : '';
       if (!destino) {
@@ -2990,19 +2998,42 @@ const commands = {
         return 'Ya completaste el tutorial de la mazmorra. Usá #portal E para abrir tu primer portal.';
       }
 
-      // Regalo inicial: espada de hierro + 2000 Coins
+      // Regalo inicial: arma según clase + 2000 Coins (sistema de equipo FASE 9)
       const bonoOro = 2000;
-      u.cash += bonoOro;
-      if (!u.rpg.armas.includes('espada_hierro')) {
-        u.rpg.armas.push('espada_hierro');
+      u.cash = Math.max(0, u.cash + bonoOro);
+
+      const armaPorClase = {
+        kensei: 'arma_katana_Comun',
+        onmyoji: 'arma_tomodesellos_Comun',
+        hayate: 'arma_arcoyumi_Comun',
+        shinobi: 'arma_kodachi_Comun',
+        shikigami: 'arma_talisman_Comun',
+        medium_yurei: 'arma_campanafunebre_Comun',
+      };
+      const claveArma = u.rpg.clase ? armaPorClase[u.rpg.clase] : 'arma_katana_Comun';
+
+      const equipo = rpg.equipoDe(u);
+      if (!equipo.arma) {
+        const res = rpg.equipar(u, 'arma', claveArma);
+        if (res.error) {
+          // Fallback: crear el item directamente si algo falló
+          const item = rpg.crearItem(claveArma, 0);
+          if (item) {
+            equipo.arma = item;
+            u.rpg.arma = item.clave;
+          }
+        } else {
+          u.rpg.arma = res.item.clave;
+        }
       }
-      if (u.rpg.arma === 'nada') {
-        u.rpg.arma = 'espada_hierro';
-      }
+
       u.rpg.tutorialCompletado = true;
       markEconDirty();
 
-      return ` 🏰 *Tutorial de Portales DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${rpg.weaponLabel('espada_hierro')}* (ATK +8).\n\n📖 *Cómo jugar:*\n• Escribí #portal E para abrir una incursión por pisos (gasta 1 llave al día o ${money(rpg.PORTAL.costoOro)} de oro).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir conservando todo el botín.\n• Cuidado: si un monstruo te derrota, pierdes el 50% del botín acumulado.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
+      const armaInfo = rpg.obtenerItem(u.rpg.arma);
+      const armaNombre = armaInfo ? armaInfo.nombre : (u.rpg.arma || 'un arma');
+
+      return ` 🏰 *Tutorial de Portales DKS*\n\n¡Bienvenido, aventurero! Aquí tienes lo necesario para empezar:\n\n💰 Recibiste *${money(bonoOro)}* de oro inicial.\n⚔️ Recibiste *${armaNombre}* equipado.\n\n📖 *Cómo jugar:*\n• Escribí #portal E para abrir una incursión por pisos (entrada gratis, sin llaves ni oro).\n• Usá #avanzar para subir de piso y obtener recompensas.\n• Usá #retirarse para salir conservando todo el botín.\n• Cuidado: si un monstruo te derrota, pierdes el 50% del botín del bloque actual.\n\n💡 Consejo: Elige una clase con #clase antes de entrar para tener mejores stats en combate.\n\n¡Buena suerte en tu aventura! 🍀`;
     },
   },
 

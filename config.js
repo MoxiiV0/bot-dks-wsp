@@ -1,7 +1,7 @@
 module.exports = {
   prefix: '#',
   botName: 'DKS Bot',
-  ownerNumber: '573244351656',
+  ownerNumber: process.env.OWNER_NUMBER || '',
   groupSettings: {
     antilink: true,
     welcome: true,
@@ -10,7 +10,7 @@ module.exports = {
   },
   welcomeText: '*¡Bienvenido(a)!*\n\nHola {nombres}, bienvenido(a) a *{grupo}*.\n\nLea la descripción del grupo y sea respetuoso(a). ¡Disfruta tu estancia!',
   goodbyeText: '*Adiós* {nombres}, ha salido del grupo.',
-  mainGroupLink: 'https://chat.whatsapp.com/GTcfQzlzk279V3zGWPSaXB?s=cl&p=i&mlu=4&ilr=4',
+  mainGroupLink: process.env.MAIN_GROUP_LINK || '',
   lobbyForm: `♡ FORMULARIO DE RECLUTAMIENTO — DKS ♡
 
 ╭────────── ✦ ──────────╮

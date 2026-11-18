@@ -2,9 +2,11 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 baileys_auth/
+baileys_auth_bak_*/
 economy.json
 settings.json
-.wwebjs_auth_bak_*/
+qr.png
+qr-data.txt
 *.log
 *.bak.js
 *.zip
