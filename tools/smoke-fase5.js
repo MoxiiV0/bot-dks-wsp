@@ -70,7 +70,8 @@ check('BATALLA: fórmula, crítico, defensa, telegrafía, Despertar y derrota', 
   assert.strictEqual(BATALLA.despertar.turnosCansancio, 1);
   assert.strictEqual(BATALLA.derrota.pierdePct, 0.1);
   assert.strictEqual(BATALLA.derrota.hpRestantePct, 0.3);
-  assert.strictEqual(BATALLA.limite.turnos, 15);
+  // FASE 6: subido a 25 para que los jefes de zona (12-20 turnos) quepan.
+  assert.strictEqual(BATALLA.limite.turnos, 25);
   assert.strictEqual(BATALLA.expiracionMs, 10 * 60 * 1000);
 });
 check('8 estados con duración, acumulación y textos', () => {

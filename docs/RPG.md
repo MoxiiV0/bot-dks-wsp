@@ -2,8 +2,8 @@
 
 Estado: **FASE 1 (arquitectura) + FASE 2 (esquema v2 y migración) + FASE 3
 (progresión y stats) + FASE 4 (clases anime) + FASE 5 (motor de combate
-unificado) completas**. Las fases siguientes (6-16) irán rellenando los
-placeholders señalados.
+unificado) + FASE 6 (mundo, zonas y enemigos) completas**. Las fases
+siguientes (7-16) irán rellenando los placeholders señalados.
 
 ## Estructura
 
@@ -31,7 +31,12 @@ lib/rpg/
     ranks.js            ← RANGOS (E..S + nivel de examen), EXAMENES (jefes de
                           prueba con hp/atk/def/vel — balance FASE 5)
     battle.js           ← FASE 5: BATALLA (fórmula, crítico, defensa, telegrafía,
-                          Despertar, derrota, huida, límite), ELEMENTOS, ARQUETIPOS
+                          Despertar, derrota, huida, límite 25 turnos FASE 6),
+                          ELEMENTOS, ARQUETIPOS
+    world.js            ← FASE 6: ZONAS (6 zonas, 42 enemigos con nivel/tipo/
+                          elemento/arquetipo), ZONA_INICIAL, ESCALADO (HP/ATK/
+                          DEF por nivel, multipliers élite/jefe, EXP/oro, pesos
+                          de caza)
     arcs.js             ← ARCS (FASE 8, placeholder)
     titles.js           ← TITLES (condición + bonus)
     statuses.js         ← STATUSES (FASE 5: 8 estados con duración/pila/DOT/textos)
@@ -56,6 +61,10 @@ lib/rpg/
                           derrota inconsciente, huida, límite, expiración 10 min,
                           pasivas, doma shikigami, botín de objetos)
     loot.js             ← openChest (+objProb → OBJETOS_COMBATE), generarEventoMazmorra
+    world.js            ← FASE 6: statsEscala, recompensas, enemigoZona,
+                          zonaActual (perezosa), puedeViajar/viajar (nivel +
+                          rango, bloqueado en combate), cazar (peso 80/20,
+                          jefe solo explícito), listaZonas
     lock.js             ← withLock/isLocked: un lock por jugador
 tools/
   simulate.js           ← npm run sim — winrate/turnos por clase vs enemigo
@@ -65,6 +74,7 @@ tools/
   smoke-fase3.js        ← npm test — 27 comprobaciones de progresión/stats/rangos
   smoke-fase4.js        ← npm test — 13 comprobaciones de clases/evoluciones/pasivas
   smoke-fase5.js        ← npm test — 28 comprobaciones del motor de combate
+  smoke-fase6.js        ← npm test — 30 comprobaciones de zonas/escalado/viaje/caza
 docs/RPG.md             ← este archivo
 ```
 
@@ -130,8 +140,9 @@ Más los campos legados que siguen vivos hasta sus fases: `armas`, `casa`,
 | Combate | `startCombat(u, enemyKey, {enemy})`, `combatTurn(u, action, param)` → `{resultado, terminado, tipo}`, `getEnemy(key)`, `puedeCombatir(u)`, `activarDespertar(u)`, `factorElemental(a, b)`, `aplicarEstado(lista, id, turnos)` |
 | Efectos | `kitDe(u)`, `resolveHabilidad(u, ref, c)`, `useSkill(u, key)`, `combinarSkills(u, k1, k2)` |
 | Botín | `openChest(u, key)`, `generarEventoMazmorra(obj)` |
+| Mundo | `zonaActual(u)`, `puedeViajar(u, zona)`, `viajar(u, zona)`, `cazar(u, ref)`, `listaZonas(u)`, `enemigoZona(key)`, `statsEscala(nivel, tipo)`, `recompensas(nivel)` |
 | Lock | `withLock(id, fn)`, `isLocked(id)` |
-| Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, ... (ver `lib/rpg/index.js`) |
+| Datos | `CLASSES`, `NUEVAS_CLASES`, `CLASES_EVOLUCION`, `EVOLUCIONES_CLASE`, `DESPERTAR_MAYOR`, `pasivaDe`, `getClass`, `baseClassKey`, `SKILLS`, `SKILLS_V2`, `KITS_POR_CLASE`, `SKILLS_ALIAS`, `ENEMIES`, `TITLES`, `WEAPONS`, `OBJETOS_COMBATE`, `BATALLA`, `ELEMENTOS`, `ARQUETIPOS`, `STATUSES`, `RANGOS`, `EXAMENES`, `ENTRENAMIENTO`, `DESCANSO`, `REGEN`, `ZONAS`, `ZONA_INICIAL`, `ESCALADO`, ... (ver `lib/rpg/index.js`) |
 
 `combatTurn` devuelve `tipo`: `'victoria' | 'derrota' | 'escape' | 'limite' | null`.
 
@@ -217,8 +228,9 @@ El estado vive en `u.rpg.combate` y todas las constantes en `data/battle.js`:
   un golpe fuerte ≥12% del HP máx). `#despertar` da 3 turnos (+30% ATK/VEL,
   skills sin Ki, acceso a Ougi) y deja 1 turno de cansancio.
 - **Derrota:** −10% del oro en mano, `inconscienteHasta` = 2 min, reaparece
-  con 30% de HP. **Huida** por VEL (15–90%). **Límite** 15 turnos (los jefes
-  además cobran 20%). **Expiración** por timestamp a los 10 min (sin timers).
+  con 30% de HP. **Huida** por VEL (15–90%). **Límite** 25 turnos (subido de
+  15 en la FASE 6 para los jefes de zona; los jefes además cobran 20%).
+  **Expiración** por timestamp a los 10 min (sin timers).
 - **Pasivas cableadas:** kensei (DEF/ATK bajo umbral), onmyōji (cadena
   fuego→viento→rayo→agua +20%), hayate (crítico +12%/+0.3), shinobi (esquiva
   10% + golpe tras esquivar), médium (robo de vida 10%/18%). Falta `heredaPct`
@@ -230,11 +242,46 @@ La curva de EXP es `expToNext(L) = ceil(40 * L^1.65)` con máximo nivel 60
 (`core/curve.js`); el daño del jugador usa `stats.atk` (base + crecimiento +
 equipo + puntos) desde la FASE 3.
 
+## Mundo, zonas y enemigos (FASE 6)
+
+Todo el contenido vive en `data/world.js` (DATA pura):
+
+- **6 zonas** (`ZONAS`, claves `sakura/torii/luna/cristal/trueno/abismo`) con
+  rango de niveles: Aldea Sakura Rota 1–9, Bosque de los Mil Torii 8–18,
+  Ruinas del Templo Lunar 16–28, Desierto de Cristal 26–38, Cumbres del
+  Trueno 36–48, Abismo Eclipse 46–60. Cada zona tiene **5 enemigos normales +
+  1 élite + 1 jefe** (42 enemigos, claves únicas), cada uno con `nivel`,
+  `elemento` y `arquetipo` de IA. Las 3 zonas altas exigen rango de Cazador
+  (C/B/A).
+- **Escalado por nivel** (`ESCALADO` + `statsEscala`): HP = 45+22·Lv,
+  ATK = 8+2.6·Lv, DEF = 3+1.2·Lv; **élite** HP ×1.6 y ATK ×1.25; **jefe**
+  HP ×6 y ATK ×1.5 (con fases de IA 70/40/15 heredadas del motor FASE 5).
+- **Recompensas** (`recompensas`): EXP = `ceil(expToNext(Lv)/(10+0.25·Lv))`,
+  oro = 20+6·Lv con ±20% de variación.
+- **`enemigoZona(key)`** normaliza al esquema del motor; `getEnemy` resuelve
+  los enemigos de zona primero, así `startCombat`/`#combate` funcionan igual
+  que con `ENEMIES`/`BOSSSES`/`EXAMENES`.
+- **`#cazar [jefe|<clave>]`**: busca un enemigo al azar de tu zona actual
+  (80% normal / 20% élite; el jefe nunca sale al azar: solo con `#cazar jefe`
+  o la clave exacta). Bloqueado en combate.
+- **`#viajar <zona>`** (sin argumentos: lista con 📍 actual / 🔒 bloqueada /
+  ✅ disponible): exige nivel mínimo y, en las zonas altas, rango de Cazador;
+  bloqueado en combate. La zona se guarda en `u.rpg.zona` (perezoso:
+  arranca en `ZONA_INICIAL='sakura'`). `#estado` muestra la zona actual.
+- **Límite de turnos 25** (`BATALLA.limite.turnos`, subido de 15) para que
+  las peleas de jefe quepan en el objetivo de 12–20 turnos.
+
+> ⚠️ **Balance pendiente (decisión FASE 6):** con el multiplicador literal
+> de jefe HP ×6 / ATK ×1.5, las simulaciones dan ~0% de victoria contra
+> jefes (objetivo FASE 15: 50–65% sin pociones). Normales y élites sí caen
+> en rango. El reajuste fino queda para la FASE 15 (donde el prompt autoriza
+> ajustar datos hasta cumplir los objetivos).
+
 ## Cómo probar
 
 ```bash
 node --check index.js && node --check lib/rpg.js
-npm test                              # 33 + 27 + 13 + 28 comprobaciones (FASE 2-5)
+npm test                              # 33 + 27 + 13 + 28 + 30 comprobaciones (FASE 2-6)
 node tools/examen-sim.js 30           # balance de exámenes por clase/rango
 node tools/cli.js stats kensei
 node tools/cli.js enemies
@@ -244,14 +291,13 @@ npm run sim -- --all 200               # matriz completa
 ```
 
 En WhatsApp: `#clase kensei` (o `#clase guerrero`, acepta alias) → `#estado`
-(barras HP/Ki, VEL, puntos, medidor de Despertar) → `#entrenar atk 3` →
-`#combate jabali` + `#atk`/`#hab 1`/`#def` para subir → `#examen` en nivel 10
+(barras HP/Ki, VEL, puntos, zona, medidor de Despertar) → `#entrenar atk 3` →
+`#viajar` (lista zonas) → `#viajar torii` → `#cazar` + `#atk`/`#hab 1`/`#def`
+para subir → `#cazar jefe` para el jefe de zona → `#examen` en nivel 10
 → `#evolucionar` en nivel 15 (elige rama) → `#evolucionar mayor` en 35 →
 `#descansar`.
 
 ## Pendiente de fases posteriores
 
-- **FASE 6:** zonas y enemigos con escalado por nivel (`#cazar`, `#viajar`);
-  hoy `ENEMIES` es data fija de prueba.
 - **FASE 7:** portales reemplazan mazmorra (sacar `globalThis._mazmorra`).
 - **FASE 8:** `arcs.js` real. **FASE 9:** equipo real (rarezas con ARMAS_RAREZA).
